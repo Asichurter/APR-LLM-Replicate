@@ -476,3 +476,17 @@ def count_test_tokens(test_content):
     test_content = test_content.strip().strip('```')
     file_tokens = list(javalang.tokenizer.tokenize(test_content))
     return len(file_tokens)
+
+def collect_test_files(repo_path):
+    # todo: debug
+    return ['/root/data/GHRB/repos/checkstyle/src/test/java/com/puppycrawl/tools/checkstyle/checks/metrics/ClassFanOutComplexityCheckTest.java']
+    # file_paths = []
+    # for root, dirs, files in os.walk(repo_path):
+    #     for f in files:
+    #         if re.search(".*Test.java$", f) is not None:
+    #             file_paths.append(os.path.join(root, f))
+    # return file_paths
+
+def load_text(path):
+    with open(path, 'r') as f:
+        return f.read()
