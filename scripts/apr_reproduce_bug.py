@@ -1,5 +1,5 @@
 from os import path
-from common import collect_test_files, load_text
+from common import collect_test_files, load_text, dump_text
 from config import llm_exp_config
 from collections import defaultdict
 from tqdm import tqdm
@@ -95,10 +95,11 @@ def parse_test_std_output(project_id, stdout):
     return []
 
 
-def run_test(repo_path, test_name, project_id, record={}, record_key='stdout', timeout=5, extra_test_config=[], **kwargs):
+def run_test(repo_path, project_id, record={}, record_key='stdout', timeout=5, extra_test_config=[], **kwargs):
     fix_build_env(repo_path)
-    run_command = ['timeout', f'{timeout}m', 'mvn', 'test', '-Denforcer.skip=true',
-                   f'-Dtest={test_name}']  # TODO: extend timeout for assertj
+    # todo: This implementation is designed for single test. However, we only focus on global test of all the test samples.
+    #       Thus we can use "mvn test" without giving "Dtest" param.
+    run_command = ['timeout', f'{timeout}m', 'mvn', 'test', '-Denforcer.skip=true']  # TODO: extend timeout for assertj
 
     # Extra configs
     if 'gson' in repo_path:
@@ -117,7 +118,8 @@ def run_test(repo_path, test_name, project_id, record={}, record_key='stdout', t
     if DEBUG:
         ipdb.set_trace()
 
-    if 'compilation failure' in captured_stdout.lower() or 'compilation error' in captured_stdout.lower():
+    captured_stdout_lower = captured_stdout.lower()
+    if 'compilation failure' in captured_stdout_lower or 'compilation error' in captured_stdout_lower:
         return -2, []
 
     # TODO: Why return after sucessful build?
@@ -130,9 +132,6 @@ def run_test(repo_path, test_name, project_id, record={}, record_key='stdout', t
         return -1, []  # no compile/test failures, but something went wrong
 
     # todo: Parse the output to return detailed info about failured test methods.
-
-    # failed_tests = []
-    output_lines = captured_stdout.split('\n')
     failed_tests = parse_test_std_output(project_id, captured_stdout)
 
     # for i, line in enumerate(output_lines):
@@ -144,47 +143,29 @@ def run_test(repo_path, test_name, project_id, record={}, record_key='stdout', t
     return 0, failed_tests
 
 
-def get_test_execution_result(repo_path, test_name, file_content, project_id, **kwargs):
+def get_test_execution_result(repo_path, project_id, commit_id, commit_type, **kwargs):
     record = {}
     status, failed_tests = run_test(
-        repo_path, test_name, project_id, record=record, record_key='stdout', **kwargs)
+        repo_path, project_id, record=record, record_key='stdout', **kwargs)
 
     return {
-        'test_file_name': test_name,
+        'commit_type': commit_type,
+        'commit_id': commit_id,
         'compile_error': status == -2,
         'runtime_error': status == -1,
-        'testclass': (test_name, file_content),
-        # 'failed_tests': failed_tests,
+        'failed_tests': failed_tests,
         # todo: Failed test flag should be adapted
         'autogen_failed': status != 0, # len(failed_tests) > 0,
         'stdout': record['stdout']
     }
 
 
-def individual_run(repo_path, test_file, test_file_content, project_id, **kwargs):
-    # # example extraction of needed_classes
-    # classpaths, assertion_packages, needed_class_stubs = needed_imports_and_asserts(
-    #     repo_path, src_dir, example_test, project_id)
-    #
-    # needed_elements = (classpaths, assertion_packages)
-    #
-    # # test class generation & addition
-    # if injection:
-    #     test_name, file_content = inject_test(
-    #         repo_path, test_prefix, example_test, needed_elements, needed_class_stubs)
-    # else:
-    #     test_name, file_content = add_test(repo_path, test_prefix,
-    #                                        example_test, needed_elements, project_id)
-
-    return get_test_execution_result(repo_path, test_file, test_file_content, project_id, **kwargs)
+def individual_run(repo_path, project_id, commit_id, commit_type, **kwargs):
+    return get_test_execution_result(repo_path, project_id, commit_id, commit_type, **kwargs)
 
 
-def twover_run_experiment(repo_path, src_dir, test_prefix, test_files, buggy_commit=None, fixed_commit=None,
-                          project_id=None, injection=True, **kwargs):
-    buggy_results = []
-    fib_tests = []
-    fixed_results = []
-
+def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
+                          project_id=None, **kwargs):
     # Running experiment for buggy version
     if DEBUG:
         print('BugVer: Git Reset & Clean ...')
@@ -192,7 +173,7 @@ def twover_run_experiment(repo_path, src_dir, test_prefix, test_files, buggy_com
     git_clean(repo_path)
 
     if DEBUG:
-        print('BugVer: Git Checkout ...')
+        print(f'BugVer: Git Checkout to {buggy_commit} ...')
     git_checkout(repo_path, buggy_commit, version='buggy')
     fix_build_env(repo_path)
     if DEBUG:
@@ -202,23 +183,12 @@ def twover_run_experiment(repo_path, src_dir, test_prefix, test_files, buggy_com
         raise Exception(
             f"Buggy source Code Compilation failed: {buggy_commit}. Compiling output: {compile_output}")
 
-    for test_file in pit(test_files, color='red'):
-        if DEBUG:
-            print(f'BugVer: Run test {test_file} ...')
+    try:
         git_reset(repo_path)
-        git_clean(repo_path)  # this should not delete class files
-
-        # example_test = enforce_static_assertions(example_test)
-
-        try:
-            test_file_content = load_text(test_file)
-            buggy_info = individual_run(repo_path, test_file, test_file_content, project_id, **kwargs)
-        except Exception as e:
-            buggy_info = f'[error] {repr(e)}'
-
-        if buggy_info['autogen_failed']:
-            fib_tests.append(test_file)
-        buggy_results.append(buggy_info)
+        git_clean(repo_path)    # this should not delete class files
+        buggy_info = individual_run(repo_path, project_id, 'buggy', **kwargs)
+    except Exception as e:
+        buggy_info = f'[error] {repr(e)}'
 
     # Running experiment for fixed version
     if DEBUG:
@@ -227,7 +197,7 @@ def twover_run_experiment(repo_path, src_dir, test_prefix, test_files, buggy_com
     git_clean(repo_path)
 
     if DEBUG:
-        print('FixVer: Git Checkout ...')
+        print(f'FixVer: Git Checkout to {fixed_commit} ...')
     git_checkout(repo_path, fixed_commit, version='fixed')
     fix_build_env(repo_path)
 
@@ -238,87 +208,67 @@ def twover_run_experiment(repo_path, src_dir, test_prefix, test_files, buggy_com
         raise Exception(
             f"Fixed source Code Compilation failed: {fixed_commit}. Compiling output: {compile_output}")
 
-    for test_file in pit(test_files, color='green'):
-        if test_file not in fib_tests:
-            fixed_results.append(None)
-            continue
-
-        if DEBUG:
-            print(f'FixVer: Run test {test_file} ...')
+    try:
         git_reset(repo_path)
-        git_clean(repo_path)
+        git_clean(repo_path)    # this should not delete class files
+        # Make sure fixed version runs the same test code as buggy version
         overwrite_test_code(repo_path, buggy_commit)
+        fixed_info = individual_run(repo_path, project_id, fixed_commit, 'fixed', **kwargs)
+    except Exception as e:
+        fixed_info = f'[error] {repr(e)}'
 
-        # test_file = enforce_static_assertions(test_file)
+    # todo: Retry
+    if fixed_info['compile_error']:
+        pass
+        # retry by discarding changes in the test code
+        # test_name, file_content = fixed_info['testclass']
+        # injected_test_class = os.path.join(
+        #     test_prefix, test_name.split('#')[0].replace('.', '/') + '.java')
+        #
+        # changed_test_classes = git_staged_diffs(repo_path)
+        # for tc in changed_test_classes:
+        #     if tc != injected_test_class:
+        #         remove_file(tc, repo_path)
+        #
+        # fixed_info = get_test_execution_result(
+        #     repo_path, test_name, file_content)
 
-        try:
-            test_file_content = load_text(test_file)
-            fixed_info = individual_run(repo_path, test_file, test_file_content, project_id, **kwargs)
-        except Exception as e:
-            fixed_info = f'[error] {repr(e)}'
+    if isinstance(buggy_info, str):  # Test is syntactically incorrect (JavaSyntaxError)
+        final_result = {
+            'buggy': buggy_info,
+            'fixed': None,
+            '_success': False,
+            '_summary': "test is syntactically incorrect (JavaSyntaxError like)"
+        }
+    elif fixed_info is None:
+        final_result = {
+            'buggy': buggy_info,
+            'fixed': fixed_info,
+            '_success': False,
+            '_summary': "fixed version is None (Not possible this)"
+        }
+    else:
+        # fails_in_buggy_version = any(
+        #     map(lambda x: 'AutoGen' in x, buggy_info['failed_tests']))
+        #
+        # fails_in_fixed_version = any(
+        #     map(lambda x: 'AutoGen' in x, fixed_info['failed_tests']))
+        # TODO: Adapt here to check whether any tests failed
+        fails_in_buggy_version = True
+        fails_in_fixed_version = False
+        test_executable_in_fixed_version = fixed_info['compile_error'] == False \
+                                           and fixed_info['runtime_error'] == False
+        success = (
+                fails_in_buggy_version and not fails_in_fixed_version and test_executable_in_fixed_version)
 
-        test_name, _ = fixed_info['testclass']
-        index = test_files.index(test_file)
-        prev_test_name, _ = buggy_results[index]['testclass']
+        final_result = {
+            'buggy': buggy_info,
+            'fixed': fixed_info,
+            'success': success,
+            '_summary': f"successfully runs and result is {success}"
+        }
 
-        if test_name != prev_test_name:
-            raise AssertionError(
-                'Injected test class is different between buggy and fixed versions')
-
-        if fixed_info['compile_error']:
-            # retry by discarding changes in the test code
-            # test_name, file_content = fixed_info['testclass']
-            # injected_test_class = os.path.join(
-            #     test_prefix, test_name.split('#')[0].replace('.', '/') + '.java')
-            #
-            # changed_test_classes = git_staged_diffs(repo_path)
-            # for tc in changed_test_classes:
-            #     if tc != injected_test_class:
-            #         remove_file(tc, repo_path)
-            #
-            # fixed_info = get_test_execution_result(
-            #     repo_path, test_name, file_content)
-
-            # todo: Here we do not retry since we have nothing with test files
-            pass
-
-        fixed_results.append(fixed_info)
-
-    # Matching results together
-    final_results = []
-    assert len(buggy_results) == len(fixed_results)
-    for buggy_info, fixed_info in zip(buggy_results, fixed_results):
-        if isinstance(buggy_info, str):  # Test is syntactically incorrect (JavaSyntaxError)
-            final_results.append(buggy_info)
-            continue
-
-        if fixed_info is None:
-            final_results.append({
-                'buggy': buggy_info,
-                'fixed': fixed_info,
-                '_success': False
-            })
-        else:
-            # fails_in_buggy_version = any(
-            #     map(lambda x: 'AutoGen' in x, buggy_info['failed_tests']))
-            #
-            # fails_in_fixed_version = any(
-            #     map(lambda x: 'AutoGen' in x, fixed_info['failed_tests']))
-            # TODO: Adapt here to check whether any tests failed
-            fails_in_buggy_version = True
-            fails_in_fixed_version = False
-            test_executable_in_fixed_version = fixed_info['compile_error'] == False \
-                                               and fixed_info['runtime_error'] == False
-            success = (
-                    fails_in_buggy_version and not fails_in_fixed_version and test_executable_in_fixed_version)
-
-            final_results.append({
-                'buggy': buggy_info,
-                'fixed': fixed_info,
-                'success': success
-            })
-
-    return final_results
+    return final_result
 
 
 if __name__ == '__main__':
@@ -407,7 +357,7 @@ if __name__ == '__main__':
             'extra_test_configs': config[args.project]['extra_test_config'],
         }
 
-        test_files = collect_test_files(repo_path)
+        # test_files = collect_test_files(repo_path)
 
         # target_bug = data[f'{args.project}-{args.bug_id}']
         # todo: debug
@@ -416,16 +366,15 @@ if __name__ == '__main__':
         buggy_commit = target_bug['buggy_commits'][0]['oid']
         fixed_commit = target_bug['merge_commit']
 
-        results = twover_run_experiment(repo_path, src_dir, test_prefix, test_files, buggy_commit, fixed_commit,
-                                        project_id, **exp_kwargs)
+        results = twover_run_experiment(repo_path, buggy_commit, fixed_commit, project_id, **exp_kwargs)
 
-        for test_path, res in zip(test_files, results):
-            res_for_bug[os.path.basename(test_path)] = res
+        # for test_path, res in zip(test_files, results):
+        #     res_for_bug[os.path.basename(test_path)] = res
 
         # with open(f'/root/results/{args.exp_name}_{args.project}_{args.bug_id}.json', 'w') as f:
         #     json.dump(res_for_bug, f, indent=4)
 
-        print(res_for_bug)
+        # print(res_for_bug)
 
     else:
         raise ValueError
