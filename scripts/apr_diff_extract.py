@@ -5,6 +5,8 @@ from tree_sitter import Node as ASTNode
 import unidiff
 import Levenshtein
 
+from apr_utils import load_text
+
 _lib_path_lists = [
     # 'build/my-languages.so',
     # '../../build/my-languages.so',
@@ -16,7 +18,7 @@ _lib_path_lists = [
 # Name for tree-sitter lib loading
 lang = 'java'   # 'cpp'
 # Type of function/method declaration
-func_tgt_type = 'method_declaration'    # 'function_definition'
+func_tgt_types = ['method_declaration', 'constructor_declaration']    # 'function_definition'
 # Type of the main body of the function/method
 func_body_type = 'block'    #   'compound_statement'
 
@@ -43,7 +45,7 @@ def parse_tree(code_text):
 
 def retrieve_func_defination_nodes(cur_node: ASTNode, hit_nodes: List) -> List:
     # Only retrieve the top func def node
-    if cur_node.type == func_tgt_type:
+    if cur_node.type in func_tgt_types:
         hit_nodes.append(cur_node)
         return hit_nodes
     else:
@@ -184,22 +186,22 @@ def extract_changed_funcs_from_diff(diff: str, compare_direc: bool = True) -> Tu
     return commit_changed_funcs, True
 
 
-# if __name__ == '__main__':
-#     # diff_path = '/data1/zhijietang/vul_data/datasets/treevul-CVE/changed_funcs/treevul_filtered_diffs_v2/diffs/abrt---abrt---6e811d78e2719988ae291181f5b133af32ce62d8.diff'
-#     # diff_path = '/data1/zhijietang/vul_data/datasets/treevul-CVE/changed_funcs/treevul_filtered_diffs_v2/diffs/aawc---unrar---0ff832d31470471803b175cfff4e40c1b08ee779.diff'
-#     # diff_path = '/data1/zhijietang/vul_data/datasets/treevul-CVE/changed_funcs/treevul_filtered_diffs_v2/diffs/abrt---abrt---4f2c1ddd3e3b81d2d5146b883115371f1cada9f9.diff'
-#     diff_path = '/data1/zhijietang/temp/d4j_gson_1.diff'
-#     diff = load_text(diff_path)
-#     changed_files, ok = extract_changed_funcs_from_diff(diff)
-#
-#     prompts = []
-#     for changed_file in changed_files:
-#         file_changed_func_prompts = build_infill_prompt_for_funcs(changed_file['file'], changed_file['changed_funcs'], '<INFILL>')
-#         prompts.append({
-#             'file_path': changed_file['file'].path,
-#             'func_infill_prompts': file_changed_func_prompts
-#         })
-
+if __name__ == '__main__':
+    # diff_path = '/data1/zhijietang/vul_data/datasets/treevul-CVE/changed_funcs/treevul_filtered_diffs_v2/diffs/abrt---abrt---6e811d78e2719988ae291181f5b133af32ce62d8.diff'
+    # diff_path = '/data1/zhijietang/vul_data/datasets/treevul-CVE/changed_funcs/treevul_filtered_diffs_v2/diffs/aawc---unrar---0ff832d31470471803b175cfff4e40c1b08ee779.diff'
+    # diff_path = '/data1/zhijietang/vul_data/datasets/treevul-CVE/changed_funcs/treevul_filtered_diffs_v2/diffs/abrt---abrt---4f2c1ddd3e3b81d2d5146b883115371f1cada9f9.diff'
+    diff_path = '/data2/zhijietang/projects/libro/data/apr_wdir/diff/d4j_Csv_10.diff'
+    diff = load_text(diff_path)
+    changed_files, ok = extract_changed_funcs_from_diff(diff)
+    #
+    # prompts = []
+    # for changed_file in changed_files:
+    #     file_changed_func_prompts = build_infill_prompt_for_funcs(changed_file['file'], changed_file['changed_funcs'], '<INFILL>')
+    #     prompts.append({
+    #         'file_path': changed_file['file'].path,
+    #         'func_infill_prompts': file_changed_func_prompts
+    #     })
+    #
     # from utils.file import read_dumped
     # datas = read_dumped("/data2/zhijietang/vul_data/datasets/joern_vulberta/packed_hybrid_vol_1.pkl")
     # tree = parser.parse(encode_bytes())
