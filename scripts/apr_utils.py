@@ -51,7 +51,7 @@ def git_checkout(repo_path, commit_hash, version='buggy', strict_check=True):
         ), f"checkout for {version} commit {commit_hash} was not successful: current commit is {out.stdout.decode()}"
 
 def git_export_diff(repo_path: str, buggy_commit_hash: str, fix_commit_hash: str, output_path: str):
-    cmds = ['git', 'diff', '--unified=100000', f'--output={output_path}', fix_commit_hash, buggy_commit_hash]
+    cmds = ['git', 'diff', '--unified=100000', f'--output={output_path}', buggy_commit_hash, fix_commit_hash]
     sp_call_helper(cmds, cwd=repo_path)
     # export_output = sp.run(cmds, cwd=repo_path, capture_output=True)
     # output_msg = export_output.stdout.decode()
