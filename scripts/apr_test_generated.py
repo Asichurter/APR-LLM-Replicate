@@ -131,6 +131,10 @@ def d4j_test_generated_fix(tmp_repo_path, generated_path, buggy_hash, max_tries=
             test_status, test_msg, failed_tests = run_d4j_test(tmp_repo_path, timeout=timeout)
             end_time = time.time()
             time_to_test = end_time - start_time
+
+            # Fix empty patch case
+            if test_status != 0 and len(generated_patches) == 0:
+                test_status, test_msg = -4, f'Empty patch, run-time msg: {test_msg}'
             if verbose:
                 if test_status == -1:
                     print('[Warning] Compile failed')
@@ -138,6 +142,8 @@ def d4j_test_generated_fix(tmp_repo_path, generated_path, buggy_hash, max_tries=
                     print(f'[Error] Unknown unexpected exit (maybe timeout)')
                 elif test_status == -3:
                     print(f'[Error] Test failed, failed tests ({len(failed_tests)}) : {failed_tests[:3]}' + f"{' ...' if len(failed_tests) > 3 else ''}")
+                elif test_status == -4:
+                    print(f'[Error] Empty patch, invalid')
                 elif test_status == 0:
                     print('[Info] Test suit passed')
                 if time_to_test > 10:
@@ -149,7 +155,7 @@ def d4j_test_generated_fix(tmp_repo_path, generated_path, buggy_hash, max_tries=
                 any_passed = True
             run_try_results.append((test_status, test_msg, failed_tests))
         except Exception as e:
-            print(f'[Error] Run-time failure for {project}-{bug_id}: {e}\n\n')
+            print(f'[Error] Run-time failure for patch #{i}: {e}\n\n')
 
     plausible_patch_indices = []
     print(f"\nFinal Result:")
