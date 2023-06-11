@@ -36,19 +36,27 @@ def git_clean(repo_dir_path):
     sp.run(['git', 'clean', '-df'],
            cwd=repo_dir_path, stdout=sp.DEVNULL, stderr=sp.DEVNULL)
 
-def git_checkout(repo_path, commit_hash, version='buggy', strict_check=True):
+def git_checkout(repo_path, commit_hash, version='buggy', strict_check=True, retry=0):
     """
         For tag checkout, strict check may fail and should be disabled.
     """
-    cp = sp.run(['git', 'checkout', commit_hash],
-                cwd=repo_path, capture_output=True)
-    assert cp.returncode == 0, "checkout for {version} commit was not successful"
-
-    if strict_check:
-        out = sp.run(['git', 'rev-parse', 'HEAD'],
-                     cwd=repo_path, capture_output=True)
-        assert commit_hash in out.stdout.decode(
-        ), f"checkout for {version} commit {commit_hash} was not successful: current commit is {out.stdout.decode()}"
+    while True:
+        cp = sp.run(['git', 'checkout', commit_hash],
+                    cwd=repo_path, capture_output=True)
+        if cp.returncode != 0:
+            print(f"checkout for {commit_hash} commit was not successful")
+            if retry > 0:
+                retry -= 1
+                continue
+            else:
+                raise RuntimeError(f"checkout for {commit_hash} commit was not successful: " +
+                                   f"{cp.stdout.decode() + ' | ' + cp.stderr.decode()}")
+        if strict_check:
+            out = sp.run(['git', 'rev-parse', 'HEAD'],
+                         cwd=repo_path, capture_output=True)
+            if commit_hash not in out.stdout.decode():
+                raise RuntimeError(f"checkout for {version} commit {commit_hash} was not successful: current commit is {out.stdout.decode()}")
+        return
 
 def git_export_diff(repo_path: str, buggy_commit_hash: str, fix_commit_hash: str, output_path: str):
     cmds = ['git', 'diff', '--unified=100000', f'--output={output_path}', buggy_commit_hash, fix_commit_hash]
@@ -70,7 +78,9 @@ def sp_call_helper(cmds, cwd=None):
     if cwd is not None:
         kwargs['cwd'] = cwd
     res = sp.run(cmds, **kwargs)
-    assert res.returncode == 0, f"Return code = {res.returncode}.\n Cmd: {' '.join(cmds)}\n stdout: {res.stdout.decode()}, stderr: {res.stderr.decode()}"
+    if res.returncode != 0:
+        raise RuntimeError(f"Return code = {res.returncode}.\n Cmd: {' '.join(cmds)}\n " + \
+                           f"stdout: {res.stdout.decode()}, stderr: {res.stderr.decode()}")
 
 def make_d4j_commit_hash(project_id, bug_id, version: str):
     return f"D4J_{project_id}_{bug_id}_{version}"
