@@ -1,14 +1,3 @@
-from os import path
-from common import collect_test_files, load_text, dump_text
-from config import llm_exp_config
-from collections import defaultdict
-from tqdm import tqdm
-
-import os
-import re
-import glob
-import shutil
-import glob
 import json
 
 from ghrb_util import license_sslcontext_kickstart, fix_build_env, pit, split_project_bug_id
@@ -21,8 +10,8 @@ import ipdb
 
 DEBUG = True
 
-BUG_LIST_PATH = '/root/data/GHRB/verified_bugs.json'
-CONFIG_PATH = '/root/data/'
+BUG_LIST_PATH = '/home/user/data/GHRB/verified_bugs.json'
+CONFIG_PATH = '/home/user/data' # '/root/data/'
 
 
 def enforce_static_assertions(gen_test):
@@ -66,7 +55,7 @@ def git_clean(repo_dir_path):
 def git_checkout(repo_path, commit_hash, version='buggy'):
     cp = sp.run(['git', 'checkout', commit_hash],
                 cwd=repo_path, capture_output=True)
-    assert cp.returncode == 0, "checkout for {version} commit was not successful"
+    assert cp.returncode == 0, f"checkout for {version} commit was not successful: {cp.stdout.decode() + ' | ' + cp.stderr.decode()}"
     out = sp.run(['git', 'rev-parse', 'HEAD'],
                  cwd=repo_path, capture_output=True)
     assert commit_hash in out.stdout.decode(
@@ -81,12 +70,12 @@ def git_staged_diffs(repo_path):
     return cp.stdout.decode().splitlines()
 
 
-def overwrite_test_code(repo_path, buggy_commit, test_dir='src/test/java'):
+def overwrite_test_code(repo_path, overwrite_commit, test_dir='src/test/java'):
     # we need to synchronize test code (in merged version) same as the buggy version
-    assert buggy_commit is not None
+    assert overwrite_commit is not None
     p = sp.run(['rm', '-rf', test_dir], cwd=repo_path)
     assert p.returncode == 0
-    p = sp.run(['git', 'checkout', buggy_commit,
+    p = sp.run(['git', 'checkout', overwrite_commit,
                 '--', test_dir], cwd=repo_path)
     assert p.returncode == 0
 
@@ -97,8 +86,6 @@ def parse_test_std_output(project_id, stdout):
 
 def run_test(repo_path, project_id, record={}, record_key='stdout', timeout=5, extra_test_config=[], **kwargs):
     fix_build_env(repo_path)
-    # todo: This implementation is designed for single test. However, we only focus on global test of all the test samples.
-    #       Thus we can use "mvn test" without giving "Dtest" param.
     run_command = ['timeout', f'{timeout}m', 'mvn', 'test', '-Denforcer.skip=true']  # TODO: extend timeout for assertj
 
     # Extra configs
@@ -163,9 +150,8 @@ def get_test_execution_result(repo_path, project_id, commit_id, commit_type, **k
 def individual_run(repo_path, project_id, commit_id, commit_type, **kwargs):
     return get_test_execution_result(repo_path, project_id, commit_id, commit_type, **kwargs)
 
-
 def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
-                          project_id=None, **kwargs):
+                          project_id=None, test_dir='src/test/java', **kwargs):
     # Running experiment for buggy version
     if DEBUG:
         print('BugVer: Git Reset & Clean ...')
@@ -184,8 +170,10 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
             f"Buggy source Code Compilation failed: {buggy_commit}. Compiling output: {compile_output}")
 
     try:
-        git_reset(repo_path)
-        git_clean(repo_path)    # this should not delete class files
+        # git_reset(repo_path)
+        # git_clean(repo_path)    # this should not delete class files
+        # Use updated test suit
+        overwrite_test_code(repo_path, fixed_commit, test_dir)
         buggy_info = individual_run(repo_path, project_id, 'buggy', **kwargs)
     except Exception as e:
         buggy_info = f'[error] {repr(e)}'
@@ -207,12 +195,11 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
     if not compile_success:
         raise Exception(
             f"Fixed source Code Compilation failed: {fixed_commit}. Compiling output: {compile_output}")
-
     try:
-        git_reset(repo_path)
-        git_clean(repo_path)    # this should not delete class files
+        # git_reset(repo_path)
+        # git_clean(repo_path)    # this should not delete class files
         # Make sure fixed version runs the same test code as buggy version
-        overwrite_test_code(repo_path, buggy_commit)
+        # overwrite_test_code(repo_path, buggy_commit)
         fixed_info = individual_run(repo_path, project_id, fixed_commit, 'fixed', **kwargs)
     except Exception as e:
         fixed_info = f'[error] {repr(e)}'
@@ -347,7 +334,7 @@ if __name__ == '__main__':
         # test_prefix = config[args.project]['test_prefix']
         # project_name = config[args.project]['project_name']
         # project_id = config[args.project]['project_id']
-        repo_path = '/root/data/GHRB/repos/checkstyle/'
+        repo_path = '/home/user/repos/checkstyle/'
         src_dir = 'src/main/java/'
         test_prefix = 'src/test/java/'
         project_name = 'checkstyle_checkstyle'
@@ -366,7 +353,8 @@ if __name__ == '__main__':
         buggy_commit = target_bug['buggy_commits'][0]['oid']
         fixed_commit = target_bug['merge_commit']
 
-        results = twover_run_experiment(repo_path, buggy_commit, fixed_commit, project_id, **exp_kwargs)
+        results = twover_run_experiment(repo_path, buggy_commit, fixed_commit, project_id, test_prefix, **exp_kwargs)
+        print(results)
 
         # for test_path, res in zip(test_files, results):
         #     res_for_bug[os.path.basename(test_path)] = res
