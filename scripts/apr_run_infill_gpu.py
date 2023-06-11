@@ -12,7 +12,11 @@ import ipdb
 def infill_from_diff(diff_path, repeat_gen: int, buggy_commit, fix_commit, max_token_to_generate,
                      temperature: float = 0.8):
     # export_diff(repo_path, buggy_commit, fix_commit, diff_path)
-    diff = load_text(diff_path)
+    try:
+        diff = load_text(diff_path)
+    except UnicodeDecodeError as e:
+        print(f'UnicodeDecodeError: {e}. (skipped)')
+        return []
     changed_files, ok = extract_changed_funcs_from_diff(diff)
     assert ok, f'Fail to extract chagned funcs from diff: {fix_commit} {buggy_commit}'
 
@@ -33,7 +37,7 @@ def infill_from_diff(diff_path, repeat_gen: int, buggy_commit, fix_commit, max_t
 
         results.append({
             'file_path': changed_file['file'].path,
-            'changed_funcs': changed_func_of_file
+            'changed_funcs': changed_func_of_file,
         })
 
     return results
@@ -42,7 +46,8 @@ def infill_from_diff(diff_path, repeat_gen: int, buggy_commit, fix_commit, max_t
 def apr_run_infill(tgt_diff_base_path: str, tgt_infill_base_path: str,
                    repeat_gen: int, max_token_to_gen: int,
                    temperature: float = 0.8,
-                   vidx: int = None):
+                   vidx: int = None,
+                   overwrite: bool = False):
     selected_indices = sorted(os.listdir(tgt_diff_base_path))
     if vidx is not None:
         selected_indices = selected_indices[vidx*50:(vidx+1)*50]
@@ -57,6 +62,8 @@ def apr_run_infill(tgt_diff_base_path: str, tgt_infill_base_path: str,
         fix_hash = make_d4j_commit_hash(project_id, bug_id, "FIXED_VERSION")
 
         infill_dump_path = os.path.join(tgt_infill_base_path, f"d4j_{project_name}_{bug_id}_infill.json")
+        if not overwrite and os.path.exists(infill_dump_path):
+            continue
         infill_res = infill_from_diff(diff_file_path, repeat_gen, buggy_hash, fix_hash, max_token_to_gen, temperature)
         dump_json(infill_res, infill_dump_path)
         # print(f'[Stage 3] Compiling and Testing ...')
@@ -95,4 +102,5 @@ if __name__ == '__main__':
                    repeat_gen=200,
                    max_token_to_gen=512,
                    temperature=0.8,
-                   vidx=int(args.volume))
+                   vidx=int(args.volume),
+                   overwrite=False)
