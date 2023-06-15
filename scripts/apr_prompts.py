@@ -40,6 +40,6 @@ def build_infill_prompt_for_funcs(changed_file, func_nodes: List, placeholder: s
         func_prompts.append({
             'line_range': (start_line, end_line),
             'func_prompt': func_prompt,
-            'buggy_func': func_node.text,
+            'buggy_func': func_node.text.decode(),
         })
     return func_prompts
