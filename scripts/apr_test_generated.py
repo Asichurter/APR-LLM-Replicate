@@ -1,5 +1,6 @@
 import subprocess as sp
 import time
+import os
 from typing import Dict
 from apr_utils import load_json, load_text, dump_text, dump_json, git_reset, git_clean, git_checkout, d4j_checkout, rm_path
 from tqdm import tqdm
@@ -98,7 +99,11 @@ def run_d4j_test(repo_path, timeout=None):
 
 def d4j_test_generated_fix(tmp_repo_path, generated_path, buggy_hash, max_tries=10,
                            verbose=True, ignore_if_passed: bool = True, timeout=None):
-    generated_patches = load_json(generated_path)
+    try:
+        generated_patches = load_json(generated_path)
+    except Exception as e:
+        print(f"[Error] Fail to read generated json: {generated_path}, skipped")
+        return [], []
 
     run_try_results = []
     any_passed = False
@@ -156,6 +161,7 @@ def d4j_test_generated_fix(tmp_repo_path, generated_path, buggy_hash, max_tries=
             run_try_results.append((test_status, test_msg, failed_tests))
         except Exception as e:
             print(f'[Error] Run-time failure for patch #{i}: {e}\n\n')
+            run_try_results.append((-5, f'Run-time failure: {e}', []))
 
     plausible_patch_indices = []
     print(f"\nFinal Result:")
@@ -169,9 +175,9 @@ def d4j_test_generated_fix(tmp_repo_path, generated_path, buggy_hash, max_tries=
 config = {
     'd4j': {
         'incoder_1B_infill': {
-            'generated_base_path': '/home/user/data/apr_wdir/generated/incoder_infill',
+            'generated_base_path': '/home/user/data/apr_wdir/generated/incoder_infill/',
             'generated_file_temp': 'd4j_{}_{}_infill.json',
-            'results_dump_base_path': '/home/user/data/apr_wdir/result/d4j',
+            'results_dump_base_path': '/home/user/temp/result/',
             'buggy_commit_temp': "D4J_{}_{}_BUGGY_VERSION",
             'max_tries': 200,
             'tmp_dir_temp': '/home/user/temp/d4j_tmp_{}',
@@ -188,7 +194,7 @@ def d4j_main(args):
 
     generated_base_path = config[dataset][model]['generated_base_path']
     generated_file_temp = config[dataset][model]['generated_file_temp']
-    results_dump_path = config[dataset][model]['results_dump_base_path'] + f'{model + "_" + "_".join(projects)}_test_results.json'
+    results_dump_path = os.path.join(config[dataset][model]['results_dump_base_path'], f'{model + "_" + "_".join(projects)}_test_results.json')
     buggy_commit_temp = config[dataset][model]['buggy_commit_temp']
     max_tries = config[dataset][model]['max_tries']
     tmp_dir_temp = config[dataset][model]['tmp_dir_temp']
@@ -236,13 +242,12 @@ def d4j_main(args):
 if __name__ == '__main__':
     # # repo_path = "/data2/zhijietang/temp/gson_2_buggy/"
     # # generated_path = "/data2/zhijietang/temp/apr_test_diffs/d4j_gson_2_res.json"
-    # repo_path = "/tmp/compress_47_buggy"
-    # generated_path = "/home/user/data/apr_wdir/generated/incoder_infill/d4j_Compress_47_infill.json"
+    # repo_path = "/home/user/temp/d4j_tmp_Codec/"
+    # generated_path = "/home/user/data/apr_wdir/generated/incoder_infill/d4j_Codec_12_infill.json"
     #
-    # plausible_patch_indices, _ = d4j_test_generated_fix(repo_path, generated_path, "D4J_Compress_47_BUGGY_VERSION", max_tries=200)
+    # plausible_patch_indices, _ = d4j_test_generated_fix(repo_path, generated_path, "D4J_Codec_12_BUGGY_VERSION", max_tries=200)
     # print(f"Plausible patch indices: {plausible_patch_indices}")
 
-    import os
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--projects', default='Math')
