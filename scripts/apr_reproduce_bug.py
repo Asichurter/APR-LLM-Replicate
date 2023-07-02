@@ -142,7 +142,7 @@ def extract_failed_tests_mvn(project_id, stdout: str):
 
 def mvn_install_dependencies(repo_path):
     # Refer to Maven lifecycle: https://blog.csdn.net/qq_39505065/article/details/102915403
-    cmd = ['mvn', 'package', '--batch-mode', '-Dmaven.test.skip']
+    cmd = ['mvn', 'clean', 'package', '--batch-mode', '-Dmaven.test.skip']
     sp_call_helper(cmd, cwd=repo_path)
 
 def run_test(repo_path, project_id, record={}, record_key='stdout', timeout=5, extra_test_config=[], **kwargs):
