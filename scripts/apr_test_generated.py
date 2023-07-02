@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 import ipdb
 
-def compile_repo(repo_dir_path):
+def d4j_compile_repo(repo_dir_path):
     # actual compiling
     compile_proc = sp.run(
         ['defects4j', 'compile'],
@@ -74,7 +74,7 @@ def run_d4j_test(repo_path, timeout=None):
     # compile_cmds = ['defects4j', 'compile']
     # compile_res = sp.run(compile_cmds, cwd=repo_path, capture_output=True)
     # compile_msg = compile_res.stdout.decode()
-    compile_return_code, compile_err_lines = compile_repo(repo_path)
+    compile_return_code, compile_err_lines = d4j_compile_repo(repo_path)
     # -1: Compile error
     if compile_return_code != 0:
         return -1, compile_err_lines, []
@@ -177,7 +177,8 @@ config = {
         'incoder_1B_infill': {
             'generated_base_path': '/home/user/data/apr_wdir/generated/incoder_infill/',
             'generated_file_temp': 'd4j_{}_{}_infill.json',
-            'results_dump_base_path': '/home/user/temp/result/',
+            'results_dump_base_path': '/home/user/results/plausible/d4j/',
+            'results_dump_each_base_path': '/home/user/results/plausible/d4j/each/',
             'buggy_commit_temp': "D4J_{}_{}_BUGGY_VERSION",
             'max_tries': 200,
             'tmp_dir_temp': '/home/user/temp/d4j_tmp_{}',
@@ -195,12 +196,16 @@ def d4j_main(args):
     generated_base_path = config[dataset][model]['generated_base_path']
     generated_file_temp = config[dataset][model]['generated_file_temp']
     results_dump_path = os.path.join(config[dataset][model]['results_dump_base_path'], f'{model + "_" + "_".join(projects)}_test_results.json')
+    results_dump_each_path = os.path.join(config[dataset][model]['results_dump_each_base_path'], f'{model}' + '_{}_test_result.json')
+
     buggy_commit_temp = config[dataset][model]['buggy_commit_temp']
     max_tries = config[dataset][model]['max_tries']
     tmp_dir_temp = config[dataset][model]['tmp_dir_temp']
     timeout = config[dataset][model]['timeout']
 
     results = {}
+    if args.skip_existed:
+        results = load_json(results_dump_path)
     for project in projects:
         print(f'Running: {project} ...')
         project_id = project
@@ -210,29 +215,45 @@ def d4j_main(args):
 
         while True:
             generated_path = os.path.join(generated_base_path, generated_file_temp.format(project_id, bug_id))
+            # Skip not bug-id not generated
             if not os.path.exists(generated_path):
                 if bug_id >= 1000:
                     break
                 else:
+                    print(f'Skip {project_name}-{bug_id} since {generated_path} not found')
+                    print('-'*75)
                     bug_id += 1
                     continue
-            rm_path(tmp_dir)
-            print(f"Checkout {bug_id}b ...")
-            d4j_checkout(project_id, f'{bug_id}b', tmp_dir)
-            buggy_commit = buggy_commit_temp.format(project_id, bug_id)
-            print(f'Test bug {project_id}-{bug_id} ...')
-            plausible_patch_indices, project_bug_full_results = d4j_test_generated_fix(tmp_dir, generated_path,
-                                                                                       buggy_commit,
-                                                                                       max_tries=max_tries,
-                                                                                       verbose=config[dataset][model]['verbose'],
-                                                                                       ignore_if_passed=False,
-                                                                                       timeout=timeout)
-            bug_key = f'{project_name}-{bug_id}'
-            results[bug_key] = {
-                'generated_path': generated_path,
-                'plausible_patch_indices': plausible_patch_indices,
-                'full_results': project_bug_full_results,
-            }
+            try:
+                results_dump_each_file_path = results_dump_each_path.format(f"{project}_{bug_id}")
+                # Skip existed bug-id in project-wise result
+                if args.skip_existed and f"{project_name}-{bug_id}" in results:
+                    print(f'Skip existed {project}-{bug_id} in {results_dump_path}')
+                    print('-'*75)
+                    bug_id += 1
+                    continue
+                rm_path(tmp_dir)
+                print(f"Checkout {bug_id}b ...")
+                d4j_checkout(project_id, f'{bug_id}b', tmp_dir)
+                buggy_commit = buggy_commit_temp.format(project_id, bug_id)
+                print(f'Test bug {project_id}-{bug_id} ...')
+                plausible_patch_indices, project_bug_full_results = d4j_test_generated_fix(tmp_dir, generated_path,
+                                                                                           buggy_commit,
+                                                                                           max_tries=max_tries,
+                                                                                           verbose=config[dataset][model]['verbose'],
+                                                                                           ignore_if_passed=False,
+                                                                                           timeout=timeout)
+                bug_key = f'{project_name}-{bug_id}'
+                bug_test_report = {
+                    'generated_path': generated_path,
+                    'plausible_patch_indices': plausible_patch_indices,
+                    'full_results': project_bug_full_results,
+                }
+                results[bug_key] = bug_test_report
+                if args.dump_each:
+                    dump_json(bug_test_report, results_dump_each_file_path)
+            except Exception as e:
+                print(f"Error when testing {generated_path}: {e}. \nSkip")
             bug_id += 1
             print('-' * 50)
 
@@ -254,5 +275,7 @@ if __name__ == '__main__':
     # parser.add_argument('-t', '--title', default='incoder_infill')
     parser.add_argument('-d', '--dataset', default='d4j')
     parser.add_argument('-m', '--model', default='incoder_1B_infill')
+    parser.add_argument('--dump_each', action='store_true', default=False)
+    parser.add_argument('--skip_existed', action='store_true', default=False)
     args = parser.parse_args()
     d4j_main(args)
