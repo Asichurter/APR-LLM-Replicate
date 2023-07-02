@@ -63,6 +63,7 @@ def apr_run_infill(tgt_diff_base_path: str, tgt_infill_base_path: str,
 
         infill_dump_path = os.path.join(tgt_infill_base_path, f"d4j_{project_name}_{bug_id}_infill.json")
         if not overwrite and os.path.exists(infill_dump_path):
+            print('Skip for non-overwrite mode')
             continue
         infill_res = infill_from_diff(diff_file_path, repeat_gen, buggy_hash, fix_hash, max_token_to_gen, temperature)
         dump_json(infill_res, infill_dump_path)
