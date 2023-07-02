@@ -1,14 +1,21 @@
 import json
 
 from ghrb_util import license_sslcontext_kickstart, fix_build_env, pit, split_project_bug_id
-from apr_config import config
+from apr_config import reproduce_config
+from apr_utils import sp_call_helper, dump_json
 
 import subprocess as sp
 import argparse
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+log_handler = logging.StreamHandler()
+logger.addHandler(log_handler)
 
 import ipdb
 
-DEBUG = True
+DEBUG = False
 
 BUG_LIST_PATH = '/home/user/data/GHRB/verified_bugs.json'
 CONFIG_PATH = '/home/user/data' # '/root/data/'
@@ -24,7 +31,7 @@ def enforce_static_assertions(gen_test):
 
 
 def compile_repo(repo_path):
-    compile_proc = sp.run(['mvn', 'clean', 'compile'],
+    compile_proc = sp.run(['mvn', 'clean', 'compile', '--batch-mode',],
                           cwd=repo_path, capture_output=True)
 
     if compile_proc.returncode != 0:
@@ -79,21 +86,76 @@ def overwrite_test_code(repo_path, overwrite_commit, test_dir='src/test/java'):
                 '--', test_dir], cwd=repo_path)
     assert p.returncode == 0
 
-def parse_test_std_output(project_id, stdout):
-    # todo: parse std output of test for specific project
-    return []
+def extract_failed_tests_mvn(project_id, stdout: str):
+    # Mvn Format:
+    # -------------------------------------------------------------------------------------------
+    # [INFO] Running com.puppycrawl.tools.checkstyle.checks.metrics.ClassFanOutComplexityCheckTest
+    # [ERROR] Tests run: 23, Failures: 0, Errors: 2, Skipped: 0, Time elapsed: 0.12 s <<< FAILURE! - in com.puppycrawl.tools.checkstyle.checks.metrics.ClassFanOutComplexityCheckTest
+    # [ERROR] testClassFanOutComplexityMultiCatchBitwiseOr  Time elapsed: 0.008 s  <<< ERROR!
+    # -------------------------------------------------------------------------------------------
+    failed_test = []
+    lines = stdout.splitlines()
+    failed_test_file = None
+    for line in lines:
+        # Failed test file
+        if "<<< FAILURE!" in line:
+            anchor_pattern = "<<< FAILURE! - in "
+            anchor = line.find(anchor_pattern)
+            if anchor == -1:
+                logger.warning(f"Fail to extract exact failed test filename. Raw line: {line}")
+                failed_test_filename = line
+            else:
+                failed_test_filename = line[anchor+len(anchor_pattern):].split()[0]
+            # Append last
+            if failed_test_file is not None:
+                failed_test.append(failed_test_file)
+            failed_test_file = {
+                "failed_test_file": failed_test_filename,
+                "failed_test_method": []
+            }
+        # Failed test method in file
+        elif "<<< ERROR!" in line:
+            failed_test_method = line.split()[1]
+            if failed_test_file is None:
+                logger.error(f"No failed test file matched before failed test method found: {line}")
+                failed_test.append({
+                    "failed_test_file": None,
+                    'failed_test_method': [failed_test_method]
+                })
+            else:
+                failed_test_file["failed_test_method"].append(failed_test_method)
 
+    if failed_test_file is not None:
+        failed_test.append(failed_test_file)
+
+    return failed_test
+
+
+    # stdout_lines = stdout.strip().split('\n')
+    # # No failing tests extracted
+    # if 'Failing tests:' not in stdout_lines[0]:
+    #     return None, []
+    # failed_test_num = int(stdout_lines[0].removeprefix('Failing tests: '))
+    # failed_tests = [e.strip(' - ') for e in stdout_lines[1:] if len(e) > 1]
+    # return failed_test_num, failed_tests
+
+
+def mvn_install_dependencies(repo_path):
+    # Refer to Maven lifecycle: https://blog.csdn.net/qq_39505065/article/details/102915403
+    cmd = ['mvn', 'package', '--batch-mode', '-Dmaven.test.skip']
+    sp_call_helper(cmd, cwd=repo_path)
 
 def run_test(repo_path, project_id, record={}, record_key='stdout', timeout=5, extra_test_config=[], **kwargs):
     fix_build_env(repo_path)
-    run_command = ['timeout', f'{timeout}m', 'mvn', 'test', '-Denforcer.skip=true']  # TODO: extend timeout for assertj
+    # Set --batch-mode to disable colored output
+    run_command = ['timeout', f'{timeout}', 'mvn', 'test', '--batch-mode', '-Denforcer.skip=true']  # TODO: extend timeout for assertj
 
     # Extra configs
-    if 'gson' in repo_path:
+    if project_id == 'gson':
         run_command.extend(['-DfailIfNoTests=false'])
-    if 'sslcontext' in repo_path:
+    if project_id == 'sslcontext':
         run_command.extend(['-pl', ":sslcontext-kickstart"])
-    if 'checkstyle' in repo_path:
+    if project_id == 'checkstyle':
         run_command.extend(['-Djacoco.skip=true'])
     run_command.extend(extra_test_config)
 
@@ -119,14 +181,9 @@ def run_test(repo_path, project_id, record={}, record_key='stdout', timeout=5, e
         return -1, []  # no compile/test failures, but something went wrong
 
     # todo: Parse the output to return detailed info about failured test methods.
-    failed_tests = parse_test_std_output(project_id, captured_stdout)
-
-    # for i, line in enumerate(output_lines):
-    #     if 'AutoGen' in line and '<<< FAILURE!' in line and 'Failures:' not in line:
-    #         failed_tests.append(line.split()[1])
-    #     if 'AutoGen' in line and '<<< ERROR!' in line and 'Failures:' not in line:
-    #         failed_tests.append(line.split()[1].split('(')[0])
-
+    failed_tests = extract_failed_tests_mvn(project_id, captured_stdout)
+    if DEBUG:
+        ipdb.set_trace()
     return 0, failed_tests
 
 
@@ -141,56 +198,58 @@ def get_test_execution_result(repo_path, project_id, commit_id, commit_type, **k
         'compile_error': status == -2,
         'runtime_error': status == -1,
         'failed_tests': failed_tests,
-        # todo: Failed test flag should be adapted
-        'autogen_failed': status != 0, # len(failed_tests) > 0,
-        'stdout': record['stdout']
+        'run_succeed': status == 0,
+        'test_passed': len(failed_tests) == 0,
+        '__stdout': record['stdout']
     }
 
 
 def individual_run(repo_path, project_id, commit_id, commit_type, **kwargs):
     return get_test_execution_result(repo_path, project_id, commit_id, commit_type, **kwargs)
 
+def debug_print(msg, debug: bool):
+    if debug:
+        print(msg)
+
 def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
                           project_id=None, test_dir='src/test/java', **kwargs):
     # Running experiment for buggy version
-    if DEBUG:
-        print('BugVer: Git Reset & Clean ...')
+    logger.info('BugVer: Git Reset & Clean ...')
     git_reset(repo_path)
     git_clean(repo_path)
 
-    if DEBUG:
-        print(f'BugVer: Git Checkout to {buggy_commit} ...')
+    logger.info(f'BugVer: Git Checkout to {buggy_commit} ...')
     git_checkout(repo_path, buggy_commit, version='buggy')
     fix_build_env(repo_path)
-    if DEBUG:
-        print('BugVer: Compile ...')
+    logger.info('BugVer: Installing dependencies...')
+    mvn_install_dependencies(repo_path)
+    logger.info('BugVer: Compile ...')
     compile_success, compile_output = compile_repo(repo_path)
     if not compile_success:
-        raise Exception(
-            f"Buggy source Code Compilation failed: {buggy_commit}. Compiling output: {compile_output}")
+        return -1, f"Buggy source Code Compilation failed: {buggy_commit}. Compiling output: {compile_output}"
 
     try:
         # git_reset(repo_path)
         # git_clean(repo_path)    # this should not delete class files
         # Use updated test suit
+        logger.info('BugVer: Run test ...')
         overwrite_test_code(repo_path, fixed_commit, test_dir)
-        buggy_info = individual_run(repo_path, project_id, 'buggy', **kwargs)
+        buggy_info = individual_run(repo_path, project_id, buggy_commit, 'buggy', **kwargs)
     except Exception as e:
         buggy_info = f'[error] {repr(e)}'
 
     # Running experiment for fixed version
-    if DEBUG:
-        print('FixVer: Git Reset & Clean ...')
+    logger.info('FixVer: Git Reset & Clean ...')
     git_reset(repo_path)
     git_clean(repo_path)
 
-    if DEBUG:
-        print(f'FixVer: Git Checkout to {fixed_commit} ...')
+    logger.info(f'FixVer: Git Checkout to {fixed_commit} ...')
     git_checkout(repo_path, fixed_commit, version='fixed')
     fix_build_env(repo_path)
+    logger.info('FixVer: Installing dependencies...')
+    mvn_install_dependencies(repo_path)
 
-    if DEBUG:
-        print('FixVer: Compile ...')
+    logger.info('FixVer: Compile ...')
     compile_success, compile_output = compile_repo(repo_path)
     if not compile_success:
         raise Exception(
@@ -200,13 +259,14 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
         # git_clean(repo_path)    # this should not delete class files
         # Make sure fixed version runs the same test code as buggy version
         # overwrite_test_code(repo_path, buggy_commit)
+        logger.info('FixVer: Run test ...')
         fixed_info = individual_run(repo_path, project_id, fixed_commit, 'fixed', **kwargs)
     except Exception as e:
         fixed_info = f'[error] {repr(e)}'
 
-    # todo: Retry
-    if fixed_info['compile_error']:
-        pass
+    # # todo: Retry
+    # if fixed_info['compile_error']:
+    #     pass
         # retry by discarding changes in the test code
         # test_name, file_content = fixed_info['testclass']
         # injected_test_class = os.path.join(
@@ -222,46 +282,45 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
 
     if isinstance(buggy_info, str):  # Test is syntactically incorrect (JavaSyntaxError)
         final_result = {
+            'buggy': None,
+            'fixed': None,
+            '_success': False,
+            '_summary': f"buggy version raise exception: {buggy_info}"
+        }
+    elif isinstance(fixed_info, str):
+        final_result = {
             'buggy': buggy_info,
             'fixed': None,
             '_success': False,
-            '_summary': "test is syntactically incorrect (JavaSyntaxError like)"
-        }
-    elif fixed_info is None:
-        final_result = {
-            'buggy': buggy_info,
-            'fixed': fixed_info,
-            '_success': False,
-            '_summary': "fixed version is None (Not possible this)"
+            '_summary': f"fixed version raise exception: {fixed_info}"
         }
     else:
-        # fails_in_buggy_version = any(
-        #     map(lambda x: 'AutoGen' in x, buggy_info['failed_tests']))
-        #
-        # fails_in_fixed_version = any(
-        #     map(lambda x: 'AutoGen' in x, fixed_info['failed_tests']))
-        # TODO: Adapt here to check whether any tests failed
-        fails_in_buggy_version = True
-        fails_in_fixed_version = False
-        test_executable_in_fixed_version = fixed_info['compile_error'] == False \
-                                           and fixed_info['runtime_error'] == False
-        success = (
-                fails_in_buggy_version and not fails_in_fixed_version and test_executable_in_fixed_version)
+        fails_in_buggy_version = not buggy_info['run_succeed'] or not buggy_info['test_passed']
+        fails_in_fixed_version = not fixed_info['run_succeed'] or not fixed_info['test_passed']
+        test_executable_in_fixed_version = fixed_info['run_succeed']
+        success = (fails_in_buggy_version and
+                   not fails_in_fixed_version and
+                   test_executable_in_fixed_version)
 
         final_result = {
             'buggy': buggy_info,
             'fixed': fixed_info,
-            'success': success,
-            '_summary': f"successfully runs and result is {success}"
+            '_success': success,
+            '_summary': f"successfully runs and result is: {success}"
         }
 
+    final_result['project'] = project_id
+    final_result['project_path'] = repo_path
+
+    logger.warning(f"{project_id}: {buggy_commit} / {fixed_commit} done")
     return final_result
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--project', default='checkstyle_checkstyle')
+    parser.add_argument('-p', '--project', default='checkstyle')
     parser.add_argument('-b', '--bug_id', default=2134)
+    parser.add_argument('--debug', action="store_true", default=False)
     # parser.add_argument('-n', '--test_no', type=int, default=None)
     # parser.add_argument('--gen_test_dir', default='/root/data/GHRB/gen_tests/')
     # parser.add_argument('--all', action='store_true')
@@ -271,53 +330,7 @@ if __name__ == '__main__':
     with open(BUG_LIST_PATH) as f:
         data = json.load(f)
 
-    # GEN_TEST_DIR = args.gen_test_dir
-
-    # if args.all:
-    #     assert args.project is not None  # target project should be set
-    #
-    #     bug2tests = defaultdict(list)
-    #
-    #     for gen_test_file in glob.glob(os.path.join(GEN_TEST_DIR, '*.txt')):
-    #         bug_key = '_'.join(os.path.basename(gen_test_file).split('_')[:-2])
-    #         project, bug_id = split_project_bug_id(bug_key)
-    #         if project != args.project:
-    #             continue
-    #
-    #         bug2tests[bug_key].append(gen_test_file)
-    #
-    #     exec_results = {}
-    #     for bug_key, tests in tqdm(bug2tests.items()):
-    #         project, bug_id = split_project_bug_id(bug_key)
-    #         bug_id = int(bug_id)
-    #         res_for_bug = {}
-    #
-    #         example_tests = []
-    #         for test_file in tests:
-    #             with open(test_file) as f:
-    #                 example_tests.append(f.read())
-    #
-    #         repo_path = config[project]['repo_path']
-    #         src_dir = config[project]['src_dir']
-    #         test_prefix = config[project]['test_prefix']
-    #         project_name = config[project]['project_name']
-    #         project_id = config[project]['project_id']
-    #
-    #         target_bug = data[f'{project}-{bug_id}']
-    #         bug_no = target_bug['PR_number']
-    #         buggy_commit = target_bug['buggy_commits'][0]['oid']
-    #         fixed_commit = target_bug['merge_commit']
-    #
-    #         results = twover_run_experiment(repo_path, src_dir, test_prefix, example_tests, buggy_commit, fixed_commit,
-    #                                         project_id)
-    #
-    #         for test_path, res in zip(tests, results):
-    #             res_for_bug[os.path.basename(test_path)] = res
-    #         exec_results[bug_key] = res_for_bug
-    #
-    #         with open(f'results/{args.exp_name}_{args.project}.json', 'w') as f:
-    #             json.dump(exec_results, f, indent=4)
-
+    DEBUG = args.debug
     # if args.test_no is None:
     if True:
         # test_files = glob.glob(os.path.join(GEN_TEST_DIR, f'{args.project}_{args.bug_id}_*.txt'))
@@ -329,19 +342,20 @@ if __name__ == '__main__':
         #         example_tests.append(f.read())
 
         # todo: debug
-        # repo_path = config[args.project]['repo_path']
-        # src_dir = config[args.project]['src_dir']
-        # test_prefix = config[args.project]['test_prefix']
-        # project_name = config[args.project]['project_name']
-        # project_id = config[args.project]['project_id']
-        repo_path = '/home/user/repos/checkstyle/'
-        src_dir = 'src/main/java/'
-        test_prefix = 'src/test/java/'
-        project_name = 'checkstyle_checkstyle'
-        project_id = 'checkstyle'
+        repo_path = reproduce_config[args.project]['repo_path']
+        src_dir = reproduce_config[args.project]['src_dir']
+        test_prefix = reproduce_config[args.project]['test_prefix']
+        project_name = reproduce_config[args.project]['project_name']
+        project_id = reproduce_config[args.project]['project_id']
+        # repo_path = '/home/user/projects/checkstyle/'
+        # src_dir = 'src/main/java/'
+        # test_prefix = 'src/test/java/'
+        # project_name = 'checkstyle_checkstyle'
+        # project_id = 'checkstyle'
 
         exp_kwargs = {
-            'extra_test_configs': config[args.project]['extra_test_config'],
+            'extra_test_configs': reproduce_config[args.project]['extra_test_config'],
+            'timeout': reproduce_config[args.project]['timeout']
         }
 
         # test_files = collect_test_files(repo_path)
@@ -354,7 +368,8 @@ if __name__ == '__main__':
         fixed_commit = target_bug['merge_commit']
 
         results = twover_run_experiment(repo_path, buggy_commit, fixed_commit, project_id, test_prefix, **exp_kwargs)
-        print(results)
+        # print(results)
+        dump_json(results, '/home/user/temp/reproduce_bug_output.json')
 
         # for test_path, res in zip(test_files, results):
         #     res_for_bug[os.path.basename(test_path)] = res
@@ -363,23 +378,3 @@ if __name__ == '__main__':
         #     json.dump(res_for_bug, f, indent=4)
 
         # print(res_for_bug)
-
-    else:
-        raise ValueError
-        # with open(os.path.join(GEN_TEST_DIR, f'{args.project}_{args.bug_id}_markdown_n{args.test_no}.txt')) as f:
-        #     example_test = f.read()
-        #
-        # repo_path = config[args.project]['repo_path']
-        # src_dir = config[args.project]['src_dir']
-        # test_prefix = config[args.project]['test_prefix']
-        # project_name = config[args.project]['project_name']
-        # project_id = config[args.project]['project_id']
-        #
-        # target_bug = data[f'{args.project}-{args.bug_id}']
-        # bug_no = target_bug['PR_number']
-        # buggy_commit = target_bug['buggy_commits'][0]['oid']
-        # fixed_commit = target_bug['merge_commit']
-        #
-        # # example experiment execution
-        # print(twover_run_experiment(repo_path, src_dir, test_prefix, [example_test], buggy_commit, fixed_commit,
-        #                             project_id))
