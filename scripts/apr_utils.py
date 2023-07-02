@@ -2,6 +2,8 @@ import os
 import json
 import subprocess as sp
 import shutil
+from typing import List
+
 import pandas
 
 def load_json(path):
@@ -38,17 +40,31 @@ def read_csv_as_dict_list(path):
         })
     return rows
 
-def read_csv_as_dict(path, key):
-    data_frame = pandas.read_csv(path)
-    columns = [k for k in data_frame.columns]
-    assert key in columns
+def read_flat_csv_as_dict(path, key_index, has_header: bool = False):
+    if has_header:
+        data_frame = pandas.read_csv(path)
+    else:
+        data_frame = pandas.read_csv(path, header=None)
     result = {}
-    for row in data_frame.iterrows():
-        key_val = row[key]
+    for i, row in data_frame.iterrows():
+        key_val = row[key_index]
         if key_val in result:
             print(f"[Warning] Duplicated key detected when reading csv: {key_val} from {path}. \nOverwriting ...")
-        content = {k:row[k] for k in columns if k != key}
+        content = [row[i] for i in range(len(row)) if i != key_index]
         result[key_val] = content
+    return result
+
+def read_nocolumn_csv_as_dict(path, keys: List, main_key):
+    data_frame = pandas.read_csv(path)
+    assert main_key in keys
+    main_key_index = keys.index(main_key)
+    result = {}
+    for row in data_frame.iterrows():
+        main_key_val = row[main_key_index]
+        if main_key_val in result:
+            print(f"[Warning] Duplicated key detected when reading csv: {main_key_val} from {path}. \nOverwriting ...")
+        content = {k:row[i] for i,k in enumerate(keys) if k != main_key}
+        result[main_key_val] = content
     return result
 
 def git_reset(repo_dir_path):
