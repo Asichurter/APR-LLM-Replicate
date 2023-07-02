@@ -2,6 +2,7 @@ import os
 import json
 import subprocess as sp
 import shutil
+import pandas
 
 def load_json(path):
     with open(path, 'r', encoding='UTF-8') as f:
@@ -26,6 +27,29 @@ def rm_path(path: str):
             shutil.rmtree(path)
         else:
             os.remove(path)
+
+def read_csv_as_dict_list(path):
+    data_frame = pandas.read_csv(path)
+    columns = [k for k in data_frame.columns]
+    rows = []
+    for i, row in data_frame.iterrows():
+        rows.append({
+            k: row[k] for k in columns
+        })
+    return rows
+
+def read_csv_as_dict(path, key):
+    data_frame = pandas.read_csv(path)
+    columns = [k for k in data_frame.columns]
+    assert key in columns
+    result = {}
+    for row in data_frame.iterrows():
+        key_val = row[key]
+        if key_val in result:
+            print(f"[Warning] Duplicated key detected when reading csv: {key_val} from {path}. \nOverwriting ...")
+        content = {k:row[k] for k in columns if k != key}
+        result[key_val] = content
+    return result
 
 def git_reset(repo_dir_path):
     sp.run(['git', 'reset', '--hard', 'HEAD'],
@@ -69,18 +93,31 @@ def git_export_diff(repo_path: str, buggy_commit_hash: str, fix_commit_hash: str
 
 def d4j_checkout(project_id, version, checkout_path):
     cmds = ['defects4j', 'checkout', '-p', project_id, '-v', version, '-w', checkout_path]
-    sp_call_helper(cmds)
+    sp_call_helper(cmds, retry=3)
 
-def sp_call_helper(cmds, cwd=None):
-    kwargs = {
-        'capture_output': True,
-    }
-    if cwd is not None:
-        kwargs['cwd'] = cwd
-    res = sp.run(cmds, **kwargs)
-    if res.returncode != 0:
-        raise RuntimeError(f"Return code = {res.returncode}.\n Cmd: {' '.join(cmds)}\n " + \
-                           f"stdout: {res.stdout.decode()}, stderr: {res.stderr.decode()}")
+
+def sp_call_helper(cmds, cwd=None, retry=None):
+    retry = retry or 0
+    while True:
+        kwargs = {
+            'capture_output': True,
+        }
+        if cwd is not None:
+            kwargs['cwd'] = cwd
+        res = sp.run(cmds, **kwargs)
+        if res.returncode != 0:
+            err_msg = f"Return code = {res.returncode}.\n Cmd: {' '.join(cmds)}\n " + \
+                      f"stdout: {res.stdout.decode()}, stderr: {res.stderr.decode()}"
+            if retry <= 0:
+                raise RuntimeError(err_msg)
+            else:
+                print(f"[sp_call_helper] Cmd error: {err_msg}")
+                print(f"Retry: {retry}")
+                retry -= 1
+                continue
+        else:
+            return
+
 
 def make_d4j_commit_hash(project_id, bug_id, version: str):
     return f"D4J_{project_id}_{bug_id}_{version}"
