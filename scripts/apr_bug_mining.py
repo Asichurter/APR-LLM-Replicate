@@ -92,6 +92,8 @@ def mine_project_bugs(project_id: str,
         if i == 10:
             return
 
+import ipdb
+
 def parse_diff_size(diff_path,
                     test_prefix: str = 'src/test/java',
                     src_prefix: str = 'src/main/java'):
@@ -108,19 +110,20 @@ def parse_diff_size(diff_path,
         f_path: str = file.path
         file_type = 'other'
         if f_path.startswith(test_prefix):
-            file_type = 'src'
-        elif f_path.startswith(src_prefix):
             file_type = 'test'
+        elif f_path.startswith(src_prefix):
+            file_type = 'src'
         file_type_index = type_to_index[file_type]
         file_type_cnts[file_type_index] += 1
 
         # changed func within file
-        f_changed_funcs = extract_changed_funcs_from_diff(str(file))
-        changed_func_cnts[file_type_index] += len(f_changed_funcs)
-        for func in f_changed_funcs:
-            # Signature only
-            func_to_append = [file_type, func[2], func[3]]
-            changed_funcs.append(func_to_append)
+        f_changed_funcs, ok = extract_changed_funcs_from_diff(str(file), sig_only=True)
+        if ok:
+            changed_func_cnts[file_type_index] += len(f_changed_funcs)
+            # Only one file
+            for func in f_changed_funcs[0]["changed_funcs"]:
+                # Signature only
+                changed_funcs.append(func)
 
         # Add hunk
         for hunk in file:
@@ -137,8 +140,9 @@ def parse_diff_size(diff_path,
         hunk_type = hunk["type"]
         cnt_index = type_to_index[hunk_type]
         hunk_type_cnts[cnt_index] += 1
-        add_loc_cnts[cnt_index] += hunk.added
-        del_loc_cnts[cnt_index] += hunk.removed
+        # ipdb.set_trace()
+        add_loc_cnts[cnt_index] += hunk['hunk'].added
+        del_loc_cnts[cnt_index] += hunk['hunk'].removed
 
     size_result = {
         "file": reformat_count(type_to_index, file_type_cnts),
@@ -193,17 +197,21 @@ def reformat_count(type_to_index: Dict,
 # def stat_hunk_info(hunk):
 #     pass
 
+# if __name__ == "__main__":
+#     active_bug_path = "/home/user/data/d4j_wdirs/checkstyle/framework/projects/Checkstyle/active-bugs.csv"
+#     project_layout_path = "/home/user/data/d4j_wdirs/checkstyle/framework/projects/Checkstyle/dir-layout.csv"
+#     mine_results_dump_path = "/home/user/data/d4j_wdirs/checkstyle/mine_results/"
+#     mine_diffs_dump_path = "/home/user/data/d4j_wdirs/checkstyle/mine_diffs/"
+#     bug_candidates = read_csv_as_dict_list(active_bug_path)[:300][::-1]
+#     project_layouts = read_flat_csv_as_dict(project_layout_path, key_index=0)
+#     # ipdb.set_trace()
+#     mine_project_bugs(project_id='checkstyle',
+#                       bug_candidates=bug_candidates,
+#                       project_layouts=project_layouts,
+#                       mining_result_dump_base_path=mine_results_dump_path,
+#                       mining_diff_dump_base_path=mine_diffs_dump_path,
+#                       overwrite=False)
+
 if __name__ == "__main__":
-    active_bug_path = "/home/user/data/d4j_wdirs/checkstyle/framework/projects/Checkstyle/active-bugs.csv"
-    project_layout_path = "/home/user/data/d4j_wdirs/checkstyle/framework/projects/Checkstyle/dir-layout.csv"
-    mine_results_dump_path = "/home/user/data/d4j_wdirs/checkstyle/mine_results/"
-    mine_diffs_dump_path = "/home/user/data/d4j_wdirs/checkstyle/mine_diffs/"
-    bug_candidates = read_csv_as_dict_list(active_bug_path)[:300][::-1]
-    project_layouts = read_flat_csv_as_dict(project_layout_path, key_index=0)
-    # ipdb.set_trace()
-    mine_project_bugs(project_id='checkstyle',
-                      bug_candidates=bug_candidates,
-                      project_layouts=project_layouts,
-                      mining_result_dump_base_path=mine_results_dump_path,
-                      mining_diff_dump_base_path=mine_diffs_dump_path,
-                      overwrite=False)
+    import fire
+    fire.Fire(parse_diff_size)
