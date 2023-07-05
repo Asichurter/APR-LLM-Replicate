@@ -12,8 +12,9 @@ _lib_path_lists = [
     # '../../build/my-languages.so',
     # '../../../build/my-languages.so',
     # '../build/my-languages.so'
-    '/data1/zhijietang/temp/language-build/java.so',
-    '/data2/zhijietang/libs/treesitter-java/java.so'
+    '/data1/zhijietang/temp/language-build/java.so',        # vlis6
+    '/data2/zhijietang/libs/treesitter-java/java.so',       # vlis7
+    '/home/user/data/libs/java.so',                         # libro-docker
 ]
 # Name for tree-sitter lib loading
 lang = 'java'   # 'cpp'
@@ -104,7 +105,7 @@ def compare_align_funcs_based_on_signatures(a_func_nodes: List[ASTNode], b_func_
     return matched_func_def_node_pairs
 
 
-def extract_changed_funcs_from_diff(diff: str, compare_direc: bool = True) -> Tuple[List, bool]:
+def extract_changed_funcs_from_diff(diff: str, compare_direc: bool = True, sig_only: bool = False) -> Tuple[List, bool]:
     """
     This method extract changed function pairs from diff, by following steps:
 
@@ -165,18 +166,22 @@ def extract_changed_funcs_from_diff(diff: str, compare_direc: bool = True) -> Tu
         aligned_func_nodes = compare_align_funcs_based_on_signatures(before_func_nodes, after_func_nodes)
         changed_func_nodes = []
         for before_node, after_node, dist_ratio, a_sig, b_sig in aligned_func_nodes:
+            if sig_only:
+                cont_to_return = a_sig
+            else:
+                cont_to_return = before_node
             if after_node is None:
-                changed_func_nodes.append(before_node)
+                changed_func_nodes.append(cont_to_return)
             # Signature matched & Func changed
             elif dist_ratio == 0:
                 if before_node.text != after_node.text:
-                    changed_func_nodes.append(before_node)
+                    changed_func_nodes.append(cont_to_return)
             # Two cases:
             # 1. Func deleted, no matched b func
             # 2. Func signature changed
             # (Both two cases belong to "before-fun changed")
             else:
-                changed_func_nodes.append(before_node)
+                changed_func_nodes.append(cont_to_return)
 
         commit_changed_funcs.append({
             'file': file,
