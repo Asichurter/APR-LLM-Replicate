@@ -142,13 +142,14 @@ def extract_failed_tests_mvn(project_id, stdout: str):
 
 def mvn_install_dependencies(repo_path):
     # Refer to Maven lifecycle: https://blog.csdn.net/qq_39505065/article/details/102915403
-    cmd = ['mvn', 'clean', 'package', '--batch-mode', '-Dmaven.test.skip']
+    cmd = ['mvn', 'clean', 'package', '--batch-mode', '-Dmaven.test.skip', '-Denforcer.skip=true']
     sp_call_helper(cmd, cwd=repo_path)
 
-def run_test(repo_path, project_id, record={}, record_key='stdout', timeout=5, extra_test_config=[], **kwargs):
+def run_test(repo_path, project_id, record={}, timeout=5, extra_test_config=[], **kwargs):
     fix_build_env(repo_path)
     # Set --batch-mode to disable colored output
     run_command = ['timeout', f'{timeout}', 'mvn', 'test', '--batch-mode', '-Denforcer.skip=true']  # TODO: extend timeout for assertj
+    # run_command = ['timeout', f'{timeout}', 'mvn', 'test', '--batch-mode']  # TODO: extend timeout for assertj
 
     # Extra configs
     if project_id == 'gson':
@@ -162,25 +163,29 @@ def run_test(repo_path, project_id, record={}, record_key='stdout', timeout=5, e
     test_process = sp.run(run_command, capture_output=True, cwd=repo_path)
 
     captured_stdout = test_process.stdout.decode()
-    record[record_key] = captured_stdout
+    captured_stderr= test_process.stderr.decode()
+    record["stdout"] = captured_stdout
+    record["stderr"] = captured_stderr
 
     if DEBUG:
         ipdb.set_trace()
 
+    # Compile error
     captured_stdout_lower = captured_stdout.lower()
     if 'compilation failure' in captured_stdout_lower or 'compilation error' in captured_stdout_lower:
         return -2, []
 
-    # TODO: Why return after sucessful build?
+    # If finally reports success, means no errors and failures
     if 'BUILD SUCCESS' in captured_stdout:
         return 0, []
 
-    # TODO: Run-time error matching should be adapted.
-    # if len(captured_stdout) == 0 or 'There are test failures' not in captured_stdout:
+    # No success message, but:
+    # 1. Correctly exit
+    # 2. Without any compile/test failures, something went wrong
     if len(captured_stdout) == 0 or ('<<< FAILURE!' not in captured_stdout and '<<< ERROR!' not in captured_stdout):
-        return -1, []  # no compile/test failures, but something went wrong
+        return -1, []
+    # if len(captured_stdout) == 0 or 'There are test failures' not in captured_stdout:
 
-    # todo: Parse the output to return detailed info about failured test methods.
     failed_tests = extract_failed_tests_mvn(project_id, captured_stdout)
     if DEBUG:
         ipdb.set_trace()
@@ -190,7 +195,7 @@ def run_test(repo_path, project_id, record={}, record_key='stdout', timeout=5, e
 def get_test_execution_result(repo_path, project_id, commit_id, commit_type, **kwargs):
     record = {}
     status, failed_tests = run_test(
-        repo_path, project_id, record=record, record_key='stdout', **kwargs)
+        repo_path, project_id, record=record, **kwargs)
 
     return {
         'commit_type': commit_type,
@@ -200,7 +205,8 @@ def get_test_execution_result(repo_path, project_id, commit_id, commit_type, **k
         'failed_tests': failed_tests,
         'run_succeed': status == 0,
         'test_passed': len(failed_tests) == 0,
-        '__stdout': record['stdout']
+        '__stdout': record['stdout'],
+        '__stderr': record['stderr'],
     }
 
 
