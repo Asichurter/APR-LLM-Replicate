@@ -8,6 +8,7 @@ from apr_utils import read_csv_as_dict_list, git_export_diff, dump_json, \
 from apr_stat_utils import parse_diff_size
 from apr_reproduce_bug import twover_run_experiment
 from apr_config import bug_mining_config
+from apr_log import get_logger
 
 
 DEBUG = False
@@ -15,10 +16,7 @@ DEBUG = False
 if DEBUG:
     pass
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-log_handler = logging.StreamHandler()
-logger.addHandler(log_handler)
+logger = get_logger(__name__)
 
 def mine_project_bugs(project_id: str,
                       bug_candidates: List[Dict],
@@ -62,7 +60,7 @@ def mine_project_bugs(project_id: str,
             continue
 
         try:
-            logger.info("\n\n" + "#"*75 + f"\nChecking {project_id} #{i}: {prefix_commit} - {postfix_commit} ({postfix_date}) ...\n" + "#"*75)
+            print("\n\n" + "#"*75 + f"\nChecking {project_id} #{i}: {prefix_commit} - {postfix_commit} ({postfix_date}) ...\n" + "#"*75)
             diff_path = os.path.join(mining_diff_dump_base_path,
                                      f"{project_id}_{i}_{prefix_commit}_{postfix_commit}.diff")
             git_export_diff(repo_path, prefix_commit, postfix_commit, diff_path)
@@ -79,7 +77,8 @@ def mine_project_bugs(project_id: str,
             logger.info("Executing two-over experiment ...")
             reproduction_result = twover_run_experiment(repo_path, prefix_commit, postfix_commit, project_id,
                                                         prefix_test_path,
-                                                        **twoover_extra_args)
+                                                        **twoover_extra_args,
+                                                        t_logger=logger)
             logger.info("Parsing diff size ...")
             size_result = parse_diff_size(diff_path, test_prefix=prefix_test_path, src_prefix=prefix_src_path)
             final_result = {
@@ -103,37 +102,6 @@ def mine_project_bugs(project_id: str,
         except Exception as e:
             traceback.print_exc()
             logger.error(f"Error for {project_id} #{i}: {prefix_commit} - {postfix_commit}: {e}")
-
-        # # todo: remove
-        # if i == 10:
-        #     return
-
-
-# def stat_file_info(file,
-#                    test_prefix: str,
-#                    src_prefix: str):
-#     hunks = []
-#     f_path: str = file.path
-#     file_type = 'none'
-#     is_test, is_src, is_other = 0, 0, 0
-#     if f_path.startswith(test_prefix):
-#         is_test += 1
-#         file_type = 'src'
-#     elif f_path.startswith(src_prefix):
-#         is_src += 1
-#         file_type = 'test'
-#     else:
-#         is_other += 1
-#     # Add hunk
-#     for hunk in file:
-#         hunks.append({
-#             'type': file_type,
-#             'hunk': hunk
-#         })
-#     return hunks, is_test, is_src, is_other
-#
-# def stat_hunk_info(hunk):
-#     pass
 
 if __name__ == "__main__":
     import argparse
