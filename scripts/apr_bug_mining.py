@@ -81,7 +81,7 @@ def mine_project_bugs(project_id: str,
                                                         prefix_test_path,
                                                         **twoover_extra_args)
             logger.info("Parsing diff size ...")
-            size_result = parse_diff_size(diff_path)
+            size_result = parse_diff_size(diff_path, test_prefix=prefix_test_path, src_prefix=prefix_src_path)
             final_result = {
                 "project": project_id,
                 "info": {
