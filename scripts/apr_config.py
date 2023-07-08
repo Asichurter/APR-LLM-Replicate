@@ -7,7 +7,7 @@ reproduce_config = {
         'test_prefix': 'src/test/java/',
         'project_name': 'checkstyle',
         'project_id': 'checkstyle',
-        'timeout': '3m',
+        'timeout': '10m',
         'extra_test_config': []
     }
 }
@@ -31,7 +31,7 @@ bug_mining_config = {
                 "run_succeed": True,
                 "test_passed": True
             },
-            'timeout': '8m',
+            'timeout': '30m',
             'extra_test_config': []
         }
     }
