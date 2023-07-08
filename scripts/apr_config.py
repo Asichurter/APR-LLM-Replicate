@@ -15,6 +15,7 @@ reproduce_config = {
 bug_mining_config = {
     'checkstyle': {
         "repo_path": "/home/user/projects/checkstyle/",
+        "time_since": "2021-04",
         "size_limit": {
             "not_test_file": 1,
             "not_test_hunk": 3,
@@ -30,7 +31,7 @@ bug_mining_config = {
                 "run_succeed": True,
                 "test_passed": True
             },
-            'timeout': '3m',
+            'timeout': '8m',
             'extra_test_config': []
         }
     }
