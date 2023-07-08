@@ -6,6 +6,7 @@ from typing import List
 
 import pandas
 
+
 def load_json(path):
     with open(path, 'r', encoding='UTF-8') as f:
         j = json.load(f)
@@ -20,6 +21,7 @@ def dump_text(text, path):
         f.write(text)
 
 def dump_json(obj, path, indent=4, sort=False):
+    assert type(path) == str, 'Check order of args'
     with open(path, 'w', encoding='UTF-8') as f:
         json.dump(obj, f, indent=indent, ensure_ascii=False, sort_keys=sort)
 
@@ -107,6 +109,11 @@ def git_export_diff(repo_path: str, buggy_commit_hash: str, fix_commit_hash: str
     # if output_msg != '':
     #     print(f'Git diff: {output_msg}')
 
+def git_get_commit_data(repo_path: str, commit: str):
+    cmds = ['git', 'show', '-s', '--format=%ci <commit>', commit]
+    t = sp_call_helper(cmds, cwd=repo_path)
+    return t[:len("2023-07-05")]
+
 def d4j_checkout(project_id, version, checkout_path):
     cmds = ['defects4j', 'checkout', '-p', project_id, '-v', version, '-w', checkout_path]
     sp_call_helper(cmds, retry=3)
@@ -132,8 +139,10 @@ def sp_call_helper(cmds, cwd=None, retry=None):
                 retry -= 1
                 continue
         else:
-            return
+            return res.stdout.decode()
 
 
 def make_d4j_commit_hash(project_id, bug_id, version: str):
     return f"D4J_{project_id}_{bug_id}_{version}"
+
+
