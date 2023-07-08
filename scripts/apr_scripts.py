@@ -98,6 +98,19 @@ def commit_info(diff_path: str, project_base_path='/home/user/projects'):
                             capture_output=True)
     print(output.stdout.decode())
 
+def write_mining_std_to_file(mine_file_path: str,
+                             file_dump_path: str,
+                             is_buggy: bool =True,
+                             out_type: str = "__stdout"):
+    mine_res = load_json(mine_file_path)
+    with open(file_dump_path, "w") as f:
+        if is_buggy:
+            cont = mine_res["reproduction"]["buggy"][out_type]
+        else:
+            cont = mine_res["reproduction"]["fixed"][out_type]
+        f.write(cont)
+    print('Done')
+
 if __name__ == '__main__':
     fire.Fire()
     # aggregate_each_dump(individual_path='/home/user/results/plausible/d4j/each/',
