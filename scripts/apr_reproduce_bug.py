@@ -10,7 +10,7 @@ import subprocess as sp
 import argparse
 import logging
 
-from apr_bug_mine_re import failed_file_pattern, failure_method_pattern, error_method_pattern
+from apr_bug_mine_re import extract_failed_file, extract_failure_method, extract_error_method
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -106,7 +106,7 @@ def extract_failed_tests_mvn(project_id, stdout: str):
         line = line.strip()
         # Failed test file
         if "<<< FAILURE!" in line:
-            failed_files = re.findall(failed_file_pattern, line)
+            failed_files = extract_failed_file(line)
             # New failed file found
             if len(failed_files) > 0:
                 failed_test_filename = failed_files[0]
@@ -120,34 +120,34 @@ def extract_failed_tests_mvn(project_id, stdout: str):
                 }
             # New failed method found
             else:
-                failure_method = re.findall(failure_method_pattern, line)
-                if len(failed_files) == 0:
-                    logger.error(f"No failure method extracted in failure line: {line}")
+                failure_method = extract_failure_method(line)
+                if len(failure_method) == 0:
+                    logger.error(f"No failure method extracted in failure line: '{line}'")
                 elif failed_test_file is None:
-                    logger.error(f"Failure method found before a test file found (is None): {line}")
+                    logger.error(f"Failure method found before a test file found (is None): '{line}'")
                     failed_test_file = {
                         "failed_test_file": None,
                         "failure_test_method": failure_method,
                         "error_test_method": [],
                     }
-                elif len(failed_files) > 1:
-                    logger.warning(f"More than one failure method found: {failure_method}. Raw Line: {line}")
+                elif len(failure_method) > 1:
+                    logger.warning(f"More than one failure method found: {failure_method}. Raw Line: '{line}'")
                 else:
                     failed_test_file["failure_test_method"].append(failure_method[0])
         # New error method found
         elif "<<< ERROR!" in line:
-            error_method = re.findall(error_method_pattern, line)
+            error_method = extract_error_method(line)
             if len(error_method) == 0:
-                logger.error(f"No error method extracted in error line: {line}")
+                logger.error(f"No error method extracted in error line: '{line}'")
             elif failed_test_file is None:
-                logger.error(f"Error method found before a test file found (is None): {line}")
+                logger.error(f"Error method found before a test file found (is None): '{line}'")
                 failed_test_file = {
                     "failed_test_file": None,
                     "failure_test_method": [],
                     "error_test_method": error_method,
                 }
             elif len(error_method) > 1:
-                logger.warning(f"More than one error method found: {error_method}. Raw Line: {line}")
+                logger.warning(f"More than one error method found: {error_method}. Raw Line: '{line}'")
             else:
                 failed_test_file["error_test_method"].append(error_method[0])
 
@@ -247,18 +247,21 @@ def debug_print(msg, debug: bool):
         print(msg)
 
 def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
-                          project_id=None, test_dir='src/test/java', **kwargs):
+                          project_id=None, test_dir='src/test/java', t_logger=None, **kwargs):
+    if t_logger is None:
+        t_logger = logger
+
     # Running experiment for buggy version
-    logger.info('BugVer: Git Reset & Clean ...')
+    t_logger.info('BugVer: Git Reset & Clean ...')
     git_reset(repo_path)
     git_clean(repo_path)
 
-    logger.info(f'BugVer: Git Checkout to {buggy_commit} ...')
+    t_logger.info(f'BugVer: Git Checkout to {buggy_commit} ...')
     git_checkout(repo_path, buggy_commit, version='buggy')
     fix_build_env(repo_path)
-    logger.info('BugVer: Installing dependencies...')
+    t_logger.info('BugVer: Installing dependencies...')
     mvn_install_dependencies(repo_path)
-    logger.info('BugVer: Compile ...')
+    t_logger.info('BugVer: Compile ...')
     compile_success, compile_output = compile_repo(repo_path)
     if not compile_success:
         return -1, f"Buggy source Code Compilation failed: {buggy_commit}. Compiling output: {compile_output}"
@@ -267,24 +270,24 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
         # git_reset(repo_path)
         # git_clean(repo_path)    # this should not delete class files
         # Use updated test suit
-        logger.info('BugVer: Run test ...')
+        t_logger.info('BugVer: Run test ...')
         overwrite_test_code(repo_path, fixed_commit, test_dir)
         buggy_info = individual_run(repo_path, project_id, buggy_commit, 'buggy', **kwargs)
     except Exception as e:
         buggy_info = f'[error] {repr(e)}'
 
     # Running experiment for fixed version
-    logger.info('FixVer: Git Reset & Clean ...')
+    t_logger.info('FixVer: Git Reset & Clean ...')
     git_reset(repo_path)
     git_clean(repo_path)
 
-    logger.info(f'FixVer: Git Checkout to {fixed_commit} ...')
+    t_logger.info(f'FixVer: Git Checkout to {fixed_commit} ...')
     git_checkout(repo_path, fixed_commit, version='fixed')
     fix_build_env(repo_path)
-    logger.info('FixVer: Installing dependencies...')
+    t_logger.info('FixVer: Installing dependencies...')
     mvn_install_dependencies(repo_path)
 
-    logger.info('FixVer: Compile ...')
+    t_logger.info('FixVer: Compile ...')
     compile_success, compile_output = compile_repo(repo_path)
     if not compile_success:
         raise Exception(
@@ -294,7 +297,7 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
         # git_clean(repo_path)    # this should not delete class files
         # Make sure fixed version runs the same test code as buggy version
         # overwrite_test_code(repo_path, buggy_commit)
-        logger.info('FixVer: Run test ...')
+        t_logger.info('FixVer: Run test ...')
         fixed_info = individual_run(repo_path, project_id, fixed_commit, 'fixed', **kwargs)
     except Exception as e:
         fixed_info = f'[error] {repr(e)}'
@@ -347,7 +350,7 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
     final_result['project'] = project_id
     final_result['project_path'] = repo_path
 
-    logger.warning(f"{project_id}: {buggy_commit} / {fixed_commit} done")
+    t_logger.warning(f"{project_id}: {buggy_commit} / {fixed_commit} done")
     return final_result
 
 
