@@ -1,12 +1,16 @@
 import json
+import re
+import time
 
-from ghrb_util import license_sslcontext_kickstart, fix_build_env, pit, split_project_bug_id
+from ghrb_util import fix_build_env
 from apr_config import reproduce_config
 from apr_utils import sp_call_helper, dump_json
 
 import subprocess as sp
 import argparse
 import logging
+
+from apr_bug_mine_re import failed_file_pattern, failure_method_pattern, error_method_pattern
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -86,44 +90,66 @@ def overwrite_test_code(repo_path, overwrite_commit, test_dir='src/test/java'):
                 '--', test_dir], cwd=repo_path)
     assert p.returncode == 0
 
+
 def extract_failed_tests_mvn(project_id, stdout: str):
     # Mvn Format:
     # -------------------------------------------------------------------------------------------
     # [INFO] Running com.puppycrawl.tools.checkstyle.checks.metrics.ClassFanOutComplexityCheckTest
     # [ERROR] Tests run: 23, Failures: 0, Errors: 2, Skipped: 0, Time elapsed: 0.12 s <<< FAILURE! - in com.puppycrawl.tools.checkstyle.checks.metrics.ClassFanOutComplexityCheckTest
     # [ERROR] testClassFanOutComplexityMultiCatchBitwiseOr  Time elapsed: 0.008 s  <<< ERROR!
+    # [ERROR] testWithArrayCreateFullIdentWithArrayDeclare  Time elapsed: 0 s  <<< FAILURE!
     # -------------------------------------------------------------------------------------------
     failed_test = []
     lines = stdout.splitlines()
     failed_test_file = None
     for line in lines:
+        line = line.strip()
         # Failed test file
         if "<<< FAILURE!" in line:
-            anchor_pattern = "<<< FAILURE! - in "
-            anchor = line.find(anchor_pattern)
-            if anchor == -1:
-                logger.warning(f"Fail to extract exact failed test filename. Raw line: {line}")
-                failed_test_filename = line
+            failed_files = re.findall(failed_file_pattern, line)
+            # New failed file found
+            if len(failed_files) > 0:
+                failed_test_filename = failed_files[0]
+                # When found a new file, append last file
+                if failed_test_file is not None:
+                    failed_test.append(failed_test_file)
+                failed_test_file = {
+                    "failed_test_file": failed_test_filename,
+                    "failure_test_method": [],
+                    "error_test_method": [],
+                }
+            # New failed method found
             else:
-                failed_test_filename = line[anchor+len(anchor_pattern):].split()[0]
-            # Append last
-            if failed_test_file is not None:
-                failed_test.append(failed_test_file)
-            failed_test_file = {
-                "failed_test_file": failed_test_filename,
-                "failed_test_method": []
-            }
-        # Failed test method in file
+                failure_method = re.findall(failure_method_pattern, line)
+                if len(failed_files) == 0:
+                    logger.error(f"No failure method extracted in failure line: {line}")
+                elif failed_test_file is None:
+                    logger.error(f"Failure method found before a test file found (is None): {line}")
+                    failed_test_file = {
+                        "failed_test_file": None,
+                        "failure_test_method": failure_method,
+                        "error_test_method": [],
+                    }
+                elif len(failed_files) > 1:
+                    logger.warning(f"More than one failure method found: {failure_method}. Raw Line: {line}")
+                else:
+                    failed_test_file["failure_test_method"].append(failure_method[0])
+        # New error method found
         elif "<<< ERROR!" in line:
-            failed_test_method = line.split()[1]
-            if failed_test_file is None:
-                logger.error(f"No failed test file matched before failed test method found: {line}")
-                failed_test.append({
+            error_method = re.findall(error_method_pattern, line)
+            if len(error_method) == 0:
+                logger.error(f"No error method extracted in error line: {line}")
+            elif failed_test_file is None:
+                logger.error(f"Error method found before a test file found (is None): {line}")
+                failed_test_file = {
                     "failed_test_file": None,
-                    'failed_test_method': [failed_test_method]
-                })
+                    "failure_test_method": [],
+                    "error_test_method": error_method,
+                }
+            elif len(error_method) > 1:
+                logger.warning(f"More than one error method found: {error_method}. Raw Line: {line}")
             else:
-                failed_test_file["failed_test_method"].append(failed_test_method)
+                failed_test_file["error_test_method"].append(error_method[0])
 
     if failed_test_file is not None:
         failed_test.append(failed_test_file)
@@ -131,21 +157,12 @@ def extract_failed_tests_mvn(project_id, stdout: str):
     return failed_test
 
 
-    # stdout_lines = stdout.strip().split('\n')
-    # # No failing tests extracted
-    # if 'Failing tests:' not in stdout_lines[0]:
-    #     return None, []
-    # failed_test_num = int(stdout_lines[0].removeprefix('Failing tests: '))
-    # failed_tests = [e.strip(' - ') for e in stdout_lines[1:] if len(e) > 1]
-    # return failed_test_num, failed_tests
-
-
 def mvn_install_dependencies(repo_path):
     # Refer to Maven lifecycle: https://blog.csdn.net/qq_39505065/article/details/102915403
     cmd = ['mvn', 'clean', 'package', '--batch-mode', '-Dmaven.test.skip', '-Denforcer.skip=true']
     sp_call_helper(cmd, cwd=repo_path)
 
-def run_test(repo_path, project_id, record={}, timeout=5, extra_test_config=[], **kwargs):
+def run_test(repo_path, project_id, record={}, timeout='5m', extra_test_config=[], **kwargs):
     fix_build_env(repo_path)
     # Set --batch-mode to disable colored output
     run_command = ['timeout', f'{timeout}', 'mvn', 'test', '--batch-mode', '-Denforcer.skip=true']  # TODO: extend timeout for assertj
@@ -187,8 +204,15 @@ def run_test(repo_path, project_id, record={}, timeout=5, extra_test_config=[], 
     # if len(captured_stdout) == 0 or 'There are test failures' not in captured_stdout:
 
     failed_tests = extract_failed_tests_mvn(project_id, captured_stdout)
+
+    # Check timeout
+    if str(test_process.returncode) in ['123', '124']:
+        logger.warning(f"Timeout triggerred ({timeout})")
+        return -3, failed_tests
+
     if DEBUG:
         ipdb.set_trace()
+
     return 0, failed_tests
 
 
@@ -202,6 +226,7 @@ def get_test_execution_result(repo_path, project_id, commit_id, commit_type, **k
         'commit_id': commit_id,
         'compile_error': status == -2,
         'runtime_error': status == -1,
+        'timeout': status == -3,
         'failed_tests': failed_tests,
         'run_succeed': status == 0,
         'test_passed': len(failed_tests) == 0,
@@ -211,7 +236,11 @@ def get_test_execution_result(repo_path, project_id, commit_id, commit_type, **k
 
 
 def individual_run(repo_path, project_id, commit_id, commit_type, **kwargs):
-    return get_test_execution_result(repo_path, project_id, commit_id, commit_type, **kwargs)
+    start_time = time.time()
+    exec_result = get_test_execution_result(repo_path, project_id, commit_id, commit_type, **kwargs)
+    run_time = time.time() - start_time
+    logger.info(f"Individual run timed: {run_time} s")
+    return exec_result
 
 def debug_print(msg, debug: bool):
     if debug:
@@ -370,11 +399,14 @@ if __name__ == '__main__':
         # todo: debug
         target_bug = data['checkstyle_checkstyle-10839']
         bug_no = target_bug['PR_number']
-        buggy_commit = target_bug['buggy_commits'][0]['oid']
-        fixed_commit = target_bug['merge_commit']
+        # buggy_commit = target_bug['buggy_commits'][0]['oid']
+        # fixed_commit = target_bug['merge_commit']
+        buggy_commit = "c5acf2d3c6dda03c21ab9bcb121aaa0f53e00434"
+        fixed_commit = "caa907fa69bc25490044bf9160681d1534f97f8b"
 
         results = twover_run_experiment(repo_path, buggy_commit, fixed_commit, project_id, test_prefix, **exp_kwargs)
         # print(results)
+        print("Dump to /home/user/temp/reproduce_bug_output.json ...")
         dump_json(results, '/home/user/temp/reproduce_bug_output.json')
 
         # for test_path, res in zip(test_files, results):
