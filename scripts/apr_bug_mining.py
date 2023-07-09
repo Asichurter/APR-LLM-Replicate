@@ -24,8 +24,8 @@ def mine_project_bugs(project_id: str,
                       mining_result_dump_base_path: str,
                       mining_diff_dump_base_path: str,
                       overwrite: bool = True,
-                      default_test_dir: str = 'src/main/java',
-                      default_src_dir: str = 'src/test/java'):
+                      default_test_dir: str = 'src/test/java',
+                      default_src_dir: str = 'src/main/java'):
     project_extra_test_args = bug_mining_config[project_id]["reproduction"]["extra_test_config"]
     project_test_timeout = bug_mining_config[project_id]["reproduction"]["timeout"]
     time_since = bug_mining_config[project_id]["time_since"]
@@ -60,7 +60,7 @@ def mine_project_bugs(project_id: str,
             continue
 
         try:
-            print("\n\n" + "#"*75 + f"\nChecking {project_id} #{i}: {prefix_commit} - {postfix_commit} ({postfix_date}) ...\n" + "#"*75)
+            logger.info("\n\n" + "#"*75 + f"\nChecking {project_id} #{i}: {prefix_commit} - {postfix_commit} ({postfix_date}) ...\n" + "#"*75)
             diff_path = os.path.join(mining_diff_dump_base_path,
                                      f"{project_id}_{i}_{prefix_commit}_{postfix_commit}.diff")
             git_export_diff(repo_path, prefix_commit, postfix_commit, diff_path)
@@ -80,7 +80,8 @@ def mine_project_bugs(project_id: str,
                                                         **twoover_extra_args,
                                                         t_logger=logger)
             logger.info("Parsing diff size ...")
-            size_result = parse_diff_size(diff_path, test_prefix=prefix_test_path, src_prefix=prefix_src_path)
+            size_result = parse_diff_size(diff_path, test_prefix=prefix_test_path, src_prefix=prefix_src_path,
+                                          t_logger=logger)
             final_result = {
                 "project": project_id,
                 "info": {
