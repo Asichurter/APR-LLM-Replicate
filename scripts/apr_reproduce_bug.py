@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from typing import Dict
 
 from ghrb_util import fix_build_env
 from apr_config import reproduce_config
@@ -246,6 +247,9 @@ def debug_print(msg, debug: bool):
     if debug:
         print(msg)
 
+def check_run_failed(run_info: Dict):
+    return not run_info['run_succeed'] or not run_info['test_passed'] or run_info['timeout']
+
 def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
                           project_id=None, test_dir='src/test/java', t_logger=None, **kwargs):
     if t_logger is None:
@@ -333,8 +337,8 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
             '_summary': f"fixed version raise exception: {fixed_info}"
         }
     else:
-        fails_in_buggy_version = not buggy_info['run_succeed'] or not buggy_info['test_passed']
-        fails_in_fixed_version = not fixed_info['run_succeed'] or not fixed_info['test_passed']
+        fails_in_buggy_version = check_run_failed(buggy_info)
+        fails_in_fixed_version = check_run_failed(fixed_info)
         test_executable_in_fixed_version = fixed_info['run_succeed']
         success = (fails_in_buggy_version and
                    not fails_in_fixed_version and
@@ -344,13 +348,13 @@ def twover_run_experiment(repo_path, buggy_commit=None, fixed_commit=None,
             'buggy': buggy_info,
             'fixed': fixed_info,
             '_success': success,
-            '_summary': f"successfully runs and result is: {success}"
+            '_summary': f"successfully runs, buggy_failed={fails_in_buggy_version}, fixed_failed={fails_in_fixed_version}, success: {success}"
         }
 
     final_result['project'] = project_id
     final_result['project_path'] = repo_path
 
-    t_logger.warning(f"{project_id}: {buggy_commit} / {fixed_commit} done")
+    t_logger.info(f"{project_id}: {buggy_commit} / {fixed_commit} done")
     return final_result
 
 
