@@ -1,14 +1,16 @@
 from typing import Dict, List
-
+import traceback
 import unidiff
 
 from apr_diff_extract import extract_changed_funcs_from_diff
 from apr_utils import load_text
-
+from apr_log import get_logger
 
 def parse_diff_size(diff_path,
                     test_prefix: str = 'src/test/java',
-                    src_prefix: str = 'src/main/java'):
+                    src_prefix: str = 'src/main/java',
+                    t_logger = None):
+    t_logger = t_logger or get_logger(__name__)
     diff_cont = load_text(diff_path)
     patch = unidiff.PatchSet(diff_cont)
     hunks = []
@@ -29,7 +31,13 @@ def parse_diff_size(diff_path,
         file_type_cnts[file_type_index] += 1
 
         # changed func within file
-        f_changed_funcs, ok = extract_changed_funcs_from_diff(str(file), sig_only=True)
+        try:
+            f_changed_funcs, ok = extract_changed_funcs_from_diff(str(file), sig_only=True)
+        except RecursionError as e:
+            traceback.print_exc()
+            t_logger.error(f"Recursion error when extracting changed funcs: {e}")
+            f_changed_funcs, ok = None, False
+
         if ok:
             changed_func_cnts[file_type_index] += len(f_changed_funcs)
             # Only one file
