@@ -1,6 +1,7 @@
 from typing import Dict, List
 import traceback
 import unidiff
+import fire
 
 from apr_diff_extract import extract_changed_funcs_from_diff
 from apr_utils import load_text
@@ -39,7 +40,7 @@ def parse_diff_size(diff_path,
             f_changed_funcs, ok = None, False
 
         if ok:
-            changed_func_cnts[file_type_index] += len(f_changed_funcs)
+            changed_func_cnts[file_type_index] += len(f_changed_funcs[0]["changed_funcs"])
             # Only one file
             for func in f_changed_funcs[0]["changed_funcs"]:
                 # Signature only
@@ -91,3 +92,6 @@ def reformat_count(type_to_index: Dict,
     return {
         index_2_type[i]: counts[i] for i in range(len(counts))
     }
+
+if __name__ == '__main__':
+    fire.Fire(parse_diff_size)
